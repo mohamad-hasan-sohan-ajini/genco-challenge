@@ -222,3 +222,4 @@ __marimo__/
 # Project-specific artifacts
 *.pt
 *.parquet
+*.m
