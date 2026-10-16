@@ -1,4 +1,4 @@
-"""Generate an IEEE 118 MATPOWER case with selected line impedances increased."""
+"""Generate an IEEE 118 MATPOWER case with selected line impedances varied."""
 
 import argparse
 import math
@@ -21,10 +21,28 @@ def parse_args():
         help="Percentage of eligible lines to age (default: 10)",
     )
     parser.add_argument(
-        "--impedance-increase-percent",
+        "--min-res",
         type=float,
-        default=10.0,
-        help="Percentage increase in R and X for aged lines (default: 10)",
+        default=1.0,
+        help="Minimum per-unit resistance multiplier (default: 1.1)",
+    )
+    parser.add_argument(
+        "--max-res",
+        type=float,
+        default=1.5,
+        help="Maximum per-unit resistance multiplier (default: 1.1)",
+    )
+    parser.add_argument(
+        "--min-react",
+        type=float,
+        default=1.0,
+        help="Minimum per-unit reactance multiplier (default: 1.1)",
+    )
+    parser.add_argument(
+        "--max-react",
+        type=float,
+        default=1.5,
+        help="Maximum per-unit reactance multiplier (default: 1.1)",
     )
     parser.add_argument(
         "--seed",
@@ -38,7 +56,8 @@ def parse_args():
         required=True,
         help="Output .m file for the aged network",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    return args
 
 
 def main():
@@ -71,19 +90,22 @@ def main():
             eligible.append(idx)
 
     n_age = math.floor(len(eligible) * args.aged_lines_percent / 100 + 0.5)
-    chosen = set(random.Random(args.seed).sample(eligible, n_age))
-    multiplier = 1 + args.impedance_increase_percent / 100
-    aged_pairs = []
+    rng = random.Random(args.seed)
+    chosen = set(rng.sample(eligible, n_age))
     for idx in sorted(chosen):
         line = lines[idx]
         data, marker, comment = line.partition("%")
         tokens = list(NUMBER_RE.finditer(data))
         fields = [t.group() for t in tokens]
-        aged_pairs.append((int(float(fields[0])), int(float(fields[1]))))
+        multipliers = {
+            2: rng.uniform(args.min_res, args.max_res),
+            3: rng.uniform(args.min_react, args.max_react),
+        }
         # Replace only R and X, preserving all other MATPOWER fields, spacing and comments.
-        for column in (3, 2):  # reverse order keeps earlier match offsets unchanged
+        # reverse order keeps earlier match offsets unchanged
+        for column in (3, 2):
             token = tokens[column]
-            updated = f"{float(fields[column]) * multiplier:.16g}"
+            updated = f"{float(fields[column]) * multipliers[column]:.16g}"
             data = data[: token.start()] + updated + data[token.end() :]
         lines[idx] = data + (marker + comment if marker else "")
 
@@ -102,5 +124,5 @@ def main():
 
 if __name__ == "__main__":
     # example usage:
-    # python create_aged_network.py --aged-lines-percent 10 --impedance-increase-percent 5 --seed 42 --output grids/case118_aged05.m
+    # python create_aged_network.py --aged-lines-percent 90 --min-res 1.01 --max-res 1.5 --min-react 1.01 --max-react 1.5 --seed 42 --output grids/case118_aged.m
     main()
