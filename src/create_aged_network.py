@@ -1,6 +1,7 @@
 """Generate an IEEE 118 MATPOWER case with selected line impedances varied."""
 
 import argparse
+import json
 import math
 import random
 import re
@@ -24,25 +25,25 @@ def parse_args():
         "--min-res",
         type=float,
         default=1.0,
-        help="Minimum per-unit resistance multiplier (default: 1.1)",
+        help="Minimum per-unit resistance multiplier (default: 1.0)",
     )
     parser.add_argument(
         "--max-res",
         type=float,
         default=1.5,
-        help="Maximum per-unit resistance multiplier (default: 1.1)",
+        help="Maximum per-unit resistance multiplier (default: 1.5)",
     )
     parser.add_argument(
         "--min-react",
         type=float,
         default=1.0,
-        help="Minimum per-unit reactance multiplier (default: 1.1)",
+        help="Minimum per-unit reactance multiplier (default: 1.0)",
     )
     parser.add_argument(
         "--max-react",
         type=float,
         default=1.5,
-        help="Maximum per-unit reactance multiplier (default: 1.1)",
+        help="Maximum per-unit reactance multiplier (default: 1.5)",
     )
     parser.add_argument(
         "--seed",
@@ -72,11 +73,15 @@ def main():
 
     lines = match.group(2).splitlines(keepends=True)
     eligible = []
+    branch_rows = {}
+    branch_row = 0
     for idx, line in enumerate(lines):
         data = line.partition("%")[0]
         fields = NUMBER_RE.findall(data)
         if not fields:
             continue
+        branch_row += 1
+        branch_rows[idx] = branch_row
         if len(fields) < 11:
             raise ValueError(
                 f"Malformed branch row {idx + 1}: expected at least 11 columns, "
@@ -92,22 +97,41 @@ def main():
     n_age = math.floor(len(eligible) * args.aged_lines_percent / 100 + 0.5)
     rng = random.Random(args.seed)
     chosen = set(rng.sample(eligible, n_age))
+    affected_lines = []
     for idx in sorted(chosen):
         line = lines[idx]
         data, marker, comment = line.partition("%")
         tokens = list(NUMBER_RE.finditer(data))
         fields = [t.group() for t in tokens]
+        original_resistance = float(fields[2])
+        original_reactance = float(fields[3])
         multipliers = {
             2: rng.uniform(args.min_res, args.max_res),
             3: rng.uniform(args.min_react, args.max_react),
         }
+        affected_resistance = float(f"{original_resistance * multipliers[2]:.16g}")
+        affected_reactance = float(f"{original_reactance * multipliers[3]:.16g}")
+        updated_values = {2: affected_resistance, 3: affected_reactance}
         # Replace only R and X, preserving all other MATPOWER fields, spacing and comments.
         # reverse order keeps earlier match offsets unchanged
         for column in (3, 2):
             token = tokens[column]
-            updated = f"{float(fields[column]) * multipliers[column]:.16g}"
+            updated = f"{updated_values[column]:.16g}"
             data = data[: token.start()] + updated + data[token.end() :]
         lines[idx] = data + (marker + comment if marker else "")
+        affected_lines.append(
+            {
+                "branch_row": branch_rows[idx],
+                "from_bus": int(float(fields[0])),
+                "to_bus": int(float(fields[1])),
+                "original_resistance": original_resistance,
+                "affected_resistance": affected_resistance,
+                "resistance_multiplier": multipliers[2],
+                "original_reactance": original_reactance,
+                "affected_reactance": affected_reactance,
+                "reactance_multiplier": multipliers[3],
+            }
+        )
 
     amended = original[: match.start(2)] + "".join(lines) + original[match.end(2) :]
     # MATPOWER expects the function name to match the .m filename.
@@ -120,6 +144,15 @@ def main():
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(amended)
+    changes = {
+        "network_file": args.output.name,
+        "seed": args.seed,
+        "aged_lines_percent": args.aged_lines_percent,
+        "resistance_multiplier_range": [args.min_res, args.max_res],
+        "reactance_multiplier_range": [args.min_react, args.max_react],
+        "affected_lines": affected_lines,
+    }
+    args.output.with_suffix(".json").write_text(json.dumps(changes, indent=2) + "\n")
 
 
 if __name__ == "__main__":
