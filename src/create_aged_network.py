@@ -11,6 +11,20 @@ from gridfm_datakit.network import get_pglib_source_path
 
 BRANCH_RE = re.compile(r"(mpc\.branch\s*=\s*\[)(.*?)(\];)", re.DOTALL)
 NUMBER_RE = re.compile(r"[^\s;]+")
+FUNCTION_RE = re.compile(r"(?m)^(\s*function\s+mpc\s*=\s*)[A-Za-z]\w*")
+ORIGINAL_NETWORK_NAME = "case118_original"
+
+
+def set_matpower_function_name(contents, name):
+    """Set the MATPOWER function name to match its .m filename."""
+    updated, replacements = FUNCTION_RE.subn(
+        lambda match: match.group(1) + name,
+        contents,
+        count=1,
+    )
+    if replacements != 1:
+        raise ValueError("Could not find MATPOWER function declaration")
+    return updated
 
 
 def parse_args():
@@ -134,18 +148,22 @@ def main():
         )
 
     amended = original[: match.start(2)] + "".join(lines) + original[match.end(2) :]
-    # MATPOWER expects the function name to match the .m filename.
-    function_pattern = re.compile(r"(?m)^(\s*function\s+mpc\s*=\s*)[A-Za-z]\w*")
-    amended, replacements = function_pattern.subn(
-        lambda m: m.group(1) + args.output.stem,
-        amended,
-        count=1,
-    )
+    amended = set_matpower_function_name(amended, args.output.stem)
 
+    original_output = args.output.with_name(f"{ORIGINAL_NETWORK_NAME}.m")
+    if original_output == args.output:
+        raise ValueError(
+            f"The aged output cannot be named {ORIGINAL_NETWORK_NAME}.m because "
+            "that filename is reserved for the original network"
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(amended)
+    original_output.write_text(
+        set_matpower_function_name(original, ORIGINAL_NETWORK_NAME)
+    )
     changes = {
         "network_file": args.output.name,
+        "original_network_file": original_output.name,
         "seed": args.seed,
         "aged_lines_percent": args.aged_lines_percent,
         "resistance_multiplier_range": [args.min_res, args.max_res],
