@@ -14,7 +14,7 @@ environment and install the two GridFM packages:
 python3 -m venv venv
 source venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install gridfm-datakit gridfm-graphkit jupyterlab
+python -m pip install gridfm-datakit gridfm-graphkit jupyterlab tensorboard
 ```
 
 Set up the Julia packages used by GridFM Datakit's PowerModels solver:
