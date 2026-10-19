@@ -18,11 +18,7 @@ load:
   start_scaling_factor: 1.0 # Initial value of the global scaling factor
 
 topology_perturbation:
-  type: "random" # Type of topology generator; options: n_minus_k, random, none
-  # WARNING: the following parameters are only used if type is not "none"
-  k: 1 # Maximum number of components to drop in each perturbation
-  n_topology_variants: 10 # Number of unique perturbed topologies per scenario
-  elements: [branch, gen] # elements to perturb. options: branch, gen
+  type: "none" # No outages; use "random" or "n_minus_k" only when k > 0
   # Optional for type: "random": if provided, entry i is the probability of sampling i outages.
   # If provided, the generator samples over 0..k; otherwise it samples uniformly between 1 and k.
   # Use decimal probabilities in YAML, not fraction expressions.
@@ -35,7 +31,7 @@ generation_perturbation:
   sigma: 1.0 # Size of range used for sampling scaling factor
 
 admittance_perturbation:
-  type: "random_perturbation" # Type of admittance perturbation; options: random_perturbation, none
+  type: "none" # Type of admittance perturbation; options: random_perturbation, none
   # WARNING: the following parameter is only used if type is "random_perturbation"
   sigma: 0.2 # Size of range used for sampling scaling factor
 
