@@ -1,4 +1,10 @@
-"""Generate an IEEE 118 MATPOWER case with selected line impedances varied."""
+"""Age only transmission-line R/X on ('bus', 'connects', 'bus') edges.
+
+MATPOWER's mpc.branch table defines bus-to-bus branches. Generator-to-bus
+and bus-to-generator edges describe generator attachments, not line
+impedances; their source data in mpc.gen are never modified here.
+Transformer branches and out-of-service branches retain their parameters.
+"""
 
 import argparse
 import json
@@ -13,6 +19,7 @@ BRANCH_RE = re.compile(r"(mpc\.branch\s*=\s*\[)(.*?)(\];)", re.DOTALL)
 NUMBER_RE = re.compile(r"[^\s;]+")
 FUNCTION_RE = re.compile(r"(?m)^(\s*function\s+mpc\s*=\s*)[A-Za-z]\w*")
 ORIGINAL_NETWORK_NAME = "case118_original"
+AGED_EDGE_TYPE = ("bus", "connects", "bus")
 
 
 def set_matpower_function_name(contents, name):
@@ -81,6 +88,7 @@ def main():
     source = Path(get_pglib_source_path("case118_ieee"))
 
     original = source.read_text()
+    # Only this table maps to AGED_EDGE_TYPE. Do not edit mpc.bus or mpc.gen.
     match = BRANCH_RE.search(original)
     if match is None:
         raise ValueError(f"Could not find mpc.branch table in {source}")
@@ -147,6 +155,8 @@ def main():
             }
         )
 
+    # Splice only branch rows: all other tables and generator attachments are
+    # copied verbatim. The function declaration is renamed to match the output.
     amended = original[: match.start(2)] + "".join(lines) + original[match.end(2) :]
     amended = set_matpower_function_name(amended, args.output.stem)
 
@@ -164,6 +174,7 @@ def main():
     changes = {
         "network_file": args.output.name,
         "original_network_file": original_output.name,
+        "affected_edge_type": list(AGED_EDGE_TYPE),
         "seed": args.seed,
         "aged_lines_percent": args.aged_lines_percent,
         "resistance_multiplier_range": [args.min_res, args.max_res],
