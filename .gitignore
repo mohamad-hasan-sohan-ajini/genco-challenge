@@ -220,7 +220,11 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Project-specific artifacts
+src/datakit_out/*
+src/results/*
 *.pt
 *.parquet
 *.m
-tb/
+*.png
+*.pdf
+tb*/
