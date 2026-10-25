@@ -36,25 +36,34 @@ create an aged version. For example:
 
 ```bash
 ../venv/bin/python create_aged_network.py \
-  --aged-lines-percent 10 \
-  --min-res 0.8 \
-  --max-res 1.2 \
-  --min-react 0.9 \
-  --max-react 1.1 \
+  --weibull-shape 2.5 \
+  --weibull-scale 40 \
+  --max-age 60 \
+  --max-degradation 0.5 \
+  --degradation-exponent 2 \
   --seed 42 \
   --output grids/case118_aged.m
 ```
 
-For every selected line, the script samples independent resistance and reactance
-multipliers from the requested uniform ranges. The seed makes both line selection and
-the sampled multipliers reproducible. The command creates:
+Every eligible line (in-service, non-transformer branch) receives an age sampled
+from a Weibull distribution conditioned on ages between 0 and 60 years, using
+inverse-CDF sampling rather than clipping. The fractional degradation is
+`D = 0.5 * (age / 60)^2`, and both R and X are multiplied by the same `1 + D`.
+All five parameters shown above are configurable; the seed makes the sampled ages
+reproducible. Transformer branches, out-of-service branches, and generator data
+remain unchanged. The command creates:
 
-- `grids/case118_aged.m`: the aged network;
-- `grids/case118_aged.json`: the affected lines and their original and aged values;
+- `grids/case118_aged_seed42_k2p5_scale40.m`: the aged network;
+- `grids/case118_aged_seed42_k2p5_scale40.json`: distribution settings, sampled ages, degradations,
+  and each eligible line's original and aged values;
+- `grids/case118_aged_seed42_k2p5_scale40_age_distribution.png`: a histogram of the
+  sampled ages of eligible bus-to-bus lines;
 - `grids/case118_original.m`: the unmodified source network.
 
-The output names above match the network names used by the YAML files in
-`src/configs`.
+The script appends the seed, Weibull shape (`k`) and scale to the base output
+filename. Decimal points become `p` so the matching MATPOWER function name is
+valid. Set `network.name` in the aged YAML configuration to the generated stem,
+for example `case118_aged_seed42_k2p5_scale40`.
 
 ## 3. Generate the original and aged datasets
 
@@ -67,8 +76,12 @@ MATPOWER networks. Generate both datasets from `src`:
 ```
 
 Dataset size, random seed, perturbations, solver settings, and output directories are
-controlled by the corresponding YAML files. The current configurations write the
-original and aged data beneath `datakit_out` and `datakit_out_aged`, respectively.
+controlled by the corresponding YAML files. With `src` as the working directory,
+the current configurations write original data beneath
+`datakit_out/datakit_out_seed42/case118_original/raw/` and aged data beneath
+`datakit_out/datakit_out_seed4/case118_aged/raw/`. Datakit adds the network name
+and `raw` to `settings.data_dir`. When changing `settings.seed`, also update the
+seed suffix in `settings.data_dir`; it is a literal path, not a template.
 
 ## 4. Compare model errors
 
@@ -84,3 +97,26 @@ dataset directories produced by the two YAML configurations. The notebook downlo
 the pretrained checkpoint and normalizer, evaluates both datasets, saves prediction
 tables under `results/local_predictions`, and plots the original-versus-aged error
 distributions.
+
+## 5. Run impedance estimation without the notebook
+
+From the repository root:
+
+```bash
+venv/bin/python src/aged_impedance_estimation.py --seed 42
+```
+
+The standalone script runs Section 7's projected Adam experiment and its plots;
+it excludes Section 8. The seed is the only experiment argument (default: 42).
+It reads the original and aged datasets from
+`src/datakit_out/datakit_out_seed42/case118_original/` and
+`src/datakit_out/datakit_out_seed42/case118_aged_seed42_k2p5_scale40/`.
+Changing the seed updates both paths automatically.
+
+Estimates, prediction tables, metrics, and title-free PDF plots at 300 DPI go to
+`src/results/local_predictions/seed42/`. TensorBoard events go to
+`src/tb/seed42/impedance-multiplier-denoising-TIMESTAMP/`. Paths are resolved
+relative to the script, so it can also be launched from another working directory.
+The script retains the notebook's 250 epochs, learning rate, multiplier bounds,
+and in-service/non-transformer learnability mask. Estimation scenarios are also
+used for the final PF comparison; those plots are not held-out evaluation.
