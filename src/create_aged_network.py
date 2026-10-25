@@ -78,7 +78,7 @@ def parse_args():
         "--output",
         type=Path,
         required=True,
-        help="Output .m file for the aged network",
+        help="Base output .m filename; seed, Weibull shape and scale are appended",
     )
     args = parser.parse_args()
     for name in ("weibull_shape", "weibull_scale", "max_age", "degradation_exponent"):
@@ -110,8 +110,28 @@ def sample_truncated_weibull(rng, shape, scale, max_age):
     return scale * (-math.log1p(-probability)) ** (1.0 / shape)
 
 
+def parameterized_output_path(output, seed, shape, scale):
+    """Append sampling settings using characters valid in MATPOWER names."""
+
+    def tag(value):
+        return (
+            str(value)
+            .removesuffix(".0")
+            .replace(".", "p")
+            .replace("-", "m")
+            .replace("+", "")
+        )
+
+    return output.with_name(
+        f"{output.stem}_seed{tag(seed)}_k{tag(shape)}_scale{tag(scale)}{output.suffix}"
+    )
+
+
 def main():
     args = parse_args()
+    output_path = parameterized_output_path(
+        args.output, args.seed, args.weibull_shape, args.weibull_scale
+    )
 
     source = Path(get_pglib_source_path("case118_ieee"))
 
@@ -189,7 +209,7 @@ def main():
     # Splice only branch rows: all other tables and generator attachments are
     # copied verbatim. The function declaration is renamed to match the output.
     amended = original[: match.start(2)] + "".join(lines) + original[match.end(2) :]
-    amended = set_matpower_function_name(amended, args.output.stem)
+    amended = set_matpower_function_name(amended, output_path.stem)
 
     original_output = args.output.with_name(f"{ORIGINAL_NETWORK_NAME}.m")
     if original_output == args.output:
@@ -197,13 +217,13 @@ def main():
             f"The aged output cannot be named {ORIGINAL_NETWORK_NAME}.m because "
             "that filename is reserved for the original network"
         )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(amended)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(amended)
     original_output.write_text(
         set_matpower_function_name(original, ORIGINAL_NETWORK_NAME)
     )
     changes = {
-        "network_file": args.output.name,
+        "network_file": output_path.name,
         "original_network_file": original_output.name,
         "affected_edge_type": list(AGED_EDGE_TYPE),
         "seed": args.seed,
@@ -215,7 +235,8 @@ def main():
         "degradation_exponent": args.degradation_exponent,
         "affected_lines": affected_lines,
     }
-    args.output.with_suffix(".json").write_text(json.dumps(changes, indent=2) + "\n")
+    output_path.with_suffix(".json").write_text(json.dumps(changes, indent=2) + "\n")
+    print(f"Saved aged network to {output_path}")
 
 
 if __name__ == "__main__":
