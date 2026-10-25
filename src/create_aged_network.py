@@ -127,6 +127,40 @@ def parameterized_output_path(output, seed, shape, scale):
     )
 
 
+def plot_age_distribution(changes, output_path):
+    """Save a histogram of the actual sampled ages, one per eligible branch."""
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    ages = [line["age_years"] for line in changes["affected_lines"]]
+    minimum, maximum = changes["age_range_years"]
+    fig = Figure(figsize=(9, 5), layout="constrained")
+    FigureCanvasAgg(fig)
+    ax = fig.subplots()
+    ax.hist(
+        ages,
+        bins=20,
+        range=(minimum, maximum),
+        color="tab:blue",
+        edgecolor="white",
+        alpha=0.85,
+    )
+    ax.set_xlim(minimum, maximum)
+    ax.set_xlabel("Line age (years)")
+    ax.set_ylabel("Number of eligible bus-to-bus lines")
+    ax.set_title(
+        f"Sampled line ages — right-truncated Weibull\n"
+        f"k={changes['weibull_shape']:g}, scale={changes['weibull_scale_years']:g} years, "
+        f"seed={changes['seed']}; {len(ages)} lines"
+    )
+    if not ages:
+        ax.text(0.5, 0.5, "No eligible lines", transform=ax.transAxes, ha="center")
+    ax.grid(axis="y", alpha=0.25)
+    ax.set_axisbelow(True)
+    fig.savefig(output_path, dpi=300)
+    return fig
+
+
 def main():
     args = parse_args()
     output_path = parameterized_output_path(
@@ -235,8 +269,12 @@ def main():
         "degradation_exponent": args.degradation_exponent,
         "affected_lines": affected_lines,
     }
+    age_plot_path = output_path.with_name(f"{output_path.stem}_age_distribution.png")
+    changes["age_distribution_plot"] = age_plot_path.name
+    plot_age_distribution(changes, age_plot_path)
     output_path.with_suffix(".json").write_text(json.dumps(changes, indent=2) + "\n")
     print(f"Saved aged network to {output_path}")
+    print(f"Saved line age distribution to {age_plot_path}")
 
 
 if __name__ == "__main__":
