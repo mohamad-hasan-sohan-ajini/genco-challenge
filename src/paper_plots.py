@@ -294,6 +294,59 @@ def load_tensorboard_impedance_rmse(seed):
     raise FileNotFoundError(f"No TensorBoard run with both impedance RMSE tags in {seed_dir}")
 
 
+def print_impedance_error_reduction(curves):
+    """Compare nominal and final estimated impedances to the same aged truth."""
+    absolute_rows, relative_rows = [], []
+    for seed, series in curves.items():
+        path = RESULTS_DIR / f"seed{seed}" / "denoised_admittance.pt"
+        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+        if checkpoint.get("seed", seed) != seed:
+            raise ValueError(f"Checkpoint seed mismatch: {path}")
+        mask = checkpoint["learnable_line_mask"].bool()
+        for component, symbol in (("reactance", "X"), ("resistance", "R")):
+            actual, nominal, estimated = [
+                checkpoint[f"{prefix}_{component}_pu"][mask].detach().cpu().numpy().astype(float)
+                for prefix in ("actual_aged", "initial", "estimated")
+            ]
+            if not actual.size or not all(np.isfinite(v).all() for v in (actual, nominal, estimated)):
+                raise ValueError(f"Invalid impedance values for seed {seed}: {component}")
+            baseline_error = nominal - actual
+            final_error = estimated - actual
+            baseline_rmse = np.sqrt(np.mean(baseline_error ** 2))
+            final_rmse = np.sqrt(np.mean(final_error ** 2))
+            last = series[f"epoch/{component}_mismatch_rmse"].iloc[-1]
+            if int(last.epoch) != checkpoint["epochs"] or not np.isclose(
+                final_rmse, last.value, rtol=1e-5, atol=1e-9
+            ):
+                raise ValueError(f"Checkpoint does not match the final TensorBoard epoch: {path}: {component}")
+            reduction = lambda before, after: 100 * (1 - after / before) if before > 0 else np.nan
+            absolute_rows.append({
+                "Seed": seed, "Parameter": symbol, "Epoch": int(last.epoch), "Lines": actual.size,
+                "Nominal RMSE (p.u.)": baseline_rmse, "Final RMSE (p.u.)": final_rmse,
+                "RMSE reduction (p.u.)": baseline_rmse - final_rmse,
+                "Reduction (%)": reduction(baseline_rmse, final_rmse),
+            })
+            # Normalize each line's signed error by its own real aged value.
+            valid = np.abs(actual) > 1e-12
+            baseline_relative = (np.sqrt(np.mean((baseline_error[valid] / actual[valid]) ** 2))
+                                 if valid.any() else np.nan)
+            final_relative = (np.sqrt(np.mean((final_error[valid] / actual[valid]) ** 2))
+                              if valid.any() else np.nan)
+            relative_rows.append({
+                "Seed": seed, "Parameter": symbol, "Lines": int(valid.sum()),
+                "Nominal relative RMSE (%)": 100 * baseline_relative,
+                "Final relative RMSE (%)": 100 * final_relative,
+                "Relative RMSE reduction (%)": reduction(baseline_relative, final_relative),
+            })
+    print("\nImpedance errors against real aged values (eligible lines; final logged epoch):")
+    print(pd.DataFrame(absolute_rows).to_string(index=False, float_format=lambda v: f"{v:.6g}"))
+    print("\nPer-line relative error = (impedance - real aged impedance) / real aged impedance.")
+    print("Relative RMSE excludes real aged values with absolute magnitude <= 1e-12.")
+    print(pd.DataFrame(relative_rows).to_string(index=False, float_format=lambda v: f"{v:.6g}"))
+    print("Reduction (%) = 100 * (nominal error - final estimated error) / nominal error.")
+    print("Positive reduction indicates improvement; undefined zero-baseline reductions are NaN.")
+
+
 def plot_tensorboard_impedance_rmse():
     """Overlay seeds 0–4, using raw logged epochs and one legend per panel."""
     seeds = (0, 1, 2, 3, 4)
@@ -317,6 +370,65 @@ def plot_tensorboard_impedance_rmse():
     output_path = RESULTS_DIR / "impedance_mismatch_rmse_seeds0-4_replot.pdf"
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Saved {output_path}")
+    print_impedance_error_reduction(curves)
+    return fig
+
+
+def plot_impedance_parity(results, component, symbol, zoom_max=None):
+    """Preserve the notebook parity plot and add a bottom-right near-zero inset.
+
+    By default the inset covers the lowest quarter of lines by the larger of
+    their actual/estimated impedance. Pass zoom_max to set its upper limit.
+    """
+    from matplotlib.ticker import MaxNLocator
+
+    checkpoint = results.checkpoint
+    mask = checkpoint["learnable_line_mask"].bool()
+    aged = checkpoint[f"actual_aged_{component}_pu"][mask].detach().cpu().numpy()
+    estimated = checkpoint[f"estimated_{component}_pu"][mask].detach().cpu().numpy()
+    valid = np.isfinite(aged) & np.isfinite(estimated)
+    if not valid.any():
+        raise ValueError(f"No finite {symbol} impedance values to plot")
+    aged, estimated = aged[valid], estimated[valid]
+    lower = min(aged.min(), estimated.min())
+    upper = max(aged.max(), estimated.max())
+    if lower == upper:
+        padding = max(abs(lower) * 0.05, 1e-12)
+        lower, upper = lower - padding, upper + padding
+
+    fig, ax = plt.subplots(figsize=(7, 7), constrained_layout=True)
+    ax.scatter(estimated, aged, s=22, color="tab:blue", alpha=0.8, label="Learnable lines")
+    ax.plot([lower, upper], [lower, upper], color="black", linestyle="--",
+            linewidth=1.2, label="Perfect estimate (y = x)")
+    ax.set_xlim(lower, upper)
+    ax.set_ylim(lower, upper)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel(f"Estimated {symbol} (p.u.)")
+    ax.set_ylabel(f"Aged ground-truth {symbol} (p.u.)")
+    ax.grid(alpha=0.25)
+    ax.legend(loc="upper left")
+
+    if zoom_max is None:
+        zoom_max = float(np.quantile(np.maximum(np.abs(aged), np.abs(estimated)), 0.25))
+        if zoom_max <= 0:
+            zoom_max = max(abs(lower), abs(upper), 1e-12) * 0.1
+    if not np.isfinite(zoom_max) or zoom_max <= 0:
+        raise ValueError("zoom_max must be finite and positive")
+    inset = ax.inset_axes([0.56, 0.10, 0.39, 0.39])
+    inset.scatter(estimated, aged, s=15, color="tab:blue", alpha=0.8)
+    inset.plot([0, zoom_max], [0, zoom_max], color="black", linestyle="--", linewidth=1.0)
+    inset.set_xlim(0, zoom_max)
+    inset.set_ylim(0, zoom_max)
+    inset.set_aspect("equal", adjustable="box")
+    inset.xaxis.set_major_locator(MaxNLocator(3))
+    inset.yaxis.set_major_locator(MaxNLocator(3))
+    inset.tick_params(labelsize=8)
+    inset.grid(alpha=0.25)
+    ax.indicate_inset_zoom(inset, edgecolor="grey", alpha=0.6)
+
+    output_path = results.directory / f"{component}_estimated_vs_aged_replot.pdf"
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    print(f"Saved {output_path}; near-zero inset: 0–{zoom_max:.6g} p.u.")
     return fig
 
 
@@ -335,6 +447,10 @@ def main(argv=None):
     plt.close(figure)
     print("\n" + "-" * 100 + "\n")
     figure = plot_tensorboard_impedance_rmse()
+    plt.close(figure)
+    figure = plot_impedance_parity(results, "resistance", "R")
+    plt.close(figure)
+    figure = plot_impedance_parity(results, "reactance", "X")
     plt.close(figure)
 
 
