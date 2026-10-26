@@ -26,10 +26,16 @@ VOLTAGE_COLUMNS = {
     "Vm": ("vm_gt_pu", "vm_pred_pu", "p.u."),
     "Va": ("va_gt_deg", "va_pred_deg", "degrees"),
 }
+CASE_STYLES = {
+    "Nominal impedance": ("Nominal impedance + aged PF", "red"),
+    "Aged impedance": ("Aged impedance + aged PF", "green"),
+    "Estimated impedance": ("Estimated impedance + aged PF", "blue"),
+    "Nominal PF": ("Nominal impedance + nominal PF", "tab:orange"),
+}
 RUNS = {
-    "Nominal impedance": ("original", "red"),
-    "Aged impedance": ("true", "green"),
-    "Estimated impedance": ("estimated", "blue"),
+    "Nominal impedance": "original",
+    "Aged impedance": "true",
+    "Estimated impedance": "estimated",
 }
 
 
@@ -82,7 +88,7 @@ def load_experiment_results(seed):
         name for gt, prediction, _ in VOLTAGE_COLUMNS.values() for name in (gt, prediction)
     ]
     predictions = {}
-    for label, (run, _) in RUNS.items():
+    for label, run in RUNS.items():
         path = directory / f"aged_comparison_{run}_pf_ground_truth_predictions.parquet"
         if not path.is_file():
             raise FileNotFoundError(f"Missing saved predictions: {path}")
@@ -112,40 +118,9 @@ def plot_estimated_impedance_pf_error_histograms(results):
     As in the source plot, this includes all buses, including known PF inputs.
     Fractions sum to one within the displayed histogram range for each curve.
     """
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4), constrained_layout=True)
-    statistics = []
-    for ax, (variable, (gt, prediction, unit)) in zip(axes, VOLTAGE_COLUMNS.items()):
-        errors = {}
-        for label, table in results.predictions.items():
-            values = table[prediction].to_numpy(dtype=float) - table[gt].to_numpy(dtype=float)
-            errors[label] = values[np.isfinite(values)]
-            statistics.append({
-                "Variable": variable,
-                "Case": label,
-                "Unit": unit,
-                "Count": errors[label].size,
-                "Mean": errors[label].mean(),
-                "Std": errors[label].std(ddof=0),
-            })
-        bins = shared_histogram_bins(errors)
-        for label, (_, color) in RUNS.items():
-            counts, _ = np.histogram(errors[label], bins=bins)
-            if not counts.sum():
-                raise ValueError(f"No displayed errors for {label}: {variable}")
-            ax.stairs(counts / counts.sum(), bins, label=label, color=color, linewidth=1.5)
-        ax.axvline(0, color="black", linewidth=0.8, alpha=0.6)
-        ax.set_xlabel(f"{variable} prediction error ({unit})")
-        ax.set_ylabel("Fraction of observations")
-        ax.grid(alpha=0.2)
-        ax.legend()
-
-    source_path = results.directory / "estimated_impedance_pf_error_histograms.pdf"
-    output_path = source_path.with_name(f"{source_path.stem}_replot{source_path.suffix}")
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
-    print(f"Saved {output_path}")
-    print("\nSigned prediction-error statistics (all finite errors; population std, ddof=0):")
-    print(pd.DataFrame(statistics).to_string(index=False, float_format=lambda value: f"{value:.8g}"))
-    return fig
+    return _plot_pf_error_comparison(
+        results, results.predictions, "estimated_impedance_pf_error_histograms_replot.pdf"
+    )
 
 
 def load_nominal_pf_predictions(results):
@@ -227,8 +202,8 @@ def load_nominal_pf_predictions(results):
 def plot_nominal_vs_aged_pf_error_histograms(results):
     """Compare correctly specified original PF and aged PF error distributions."""
     cases = {
-        "Nominal impedance and PF": (load_nominal_pf_predictions(results), "tab:blue"),
-        "Aged impedance and PF": (results.predictions["Aged impedance"], "tab:orange"),
+        "Nominal PF": load_nominal_pf_predictions(results),
+        "Aged impedance": results.predictions["Aged impedance"],
     }
     return _plot_pf_error_comparison(
         results, cases, "nominal_vs_aged_pf_error_histograms_replot.pdf"
@@ -238,8 +213,8 @@ def plot_nominal_vs_aged_pf_error_histograms(results):
 def plot_hidden_aging_error_histograms(results):
     """Notebook's second plot: aged PF with nominal versus aged impedance."""
     cases = {
-        "Aged PF — nominal impedance": (results.predictions["Nominal impedance"], "tab:blue"),
-        "Aged PF — aged impedance": (results.predictions["Aged impedance"], "tab:orange"),
+        "Nominal impedance": results.predictions["Nominal impedance"],
+        "Aged impedance": results.predictions["Aged impedance"],
     }
     return _plot_pf_error_comparison(
         results, cases, "hidden_aging_error_histograms_replot.pdf"
@@ -249,16 +224,27 @@ def plot_hidden_aging_error_histograms(results):
 def _plot_pf_error_comparison(results, cases, filename):
     """Shared two-panel physical-unit errors, with one legend per panel."""
     fig, axes = plt.subplots(1, 2, figsize=(12, 4), constrained_layout=True)
+    statistics = []
     for ax, (variable, (gt, prediction, unit)) in zip(axes, VOLTAGE_COLUMNS.items()):
         errors = {}
-        for label, (table, _) in cases.items():
+        for case, table in cases.items():
+            label, _ = CASE_STYLES[case]
             if table.duplicated(KEY_COLUMNS).any():
                 raise ValueError(f"Duplicate prediction rows for {label}")
             values = table[prediction].to_numpy(dtype=float) - table[gt].to_numpy(dtype=float)
-            errors[label] = values[np.isfinite(values)]
+            errors[case] = values[np.isfinite(values)]
+            statistics.append({
+                "Variable": variable,
+                "Case": label,
+                "Unit": unit,
+                "Count": errors[case].size,
+                "Mean": errors[case].mean(),
+                "Std": errors[case].std(ddof=0),
+            })
         bins = shared_histogram_bins(errors)
-        for label, (_, color) in cases.items():
-            counts, _ = np.histogram(errors[label], bins=bins)
+        for case in cases:
+            label, color = CASE_STYLES[case]
+            counts, _ = np.histogram(errors[case], bins=bins)
             if not counts.sum():
                 raise ValueError(f"No displayed errors for {label}: {variable}")
             ax.stairs(counts / counts.sum(), bins, label=label, color=color, linewidth=1.5)
@@ -270,6 +256,8 @@ def _plot_pf_error_comparison(results, cases, filename):
     output_path = results.directory / filename
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Saved {output_path}")
+    print("\nSigned prediction-error statistics (all finite errors; population std, ddof=0):")
+    print(pd.DataFrame(statistics).to_string(index=False, float_format=lambda value: f"{value:.8g}"))
     return fig
 
 
@@ -280,8 +268,10 @@ def main(argv=None):
     # Call each paper plotting method here; load the experiment only once.
     figure = plot_estimated_impedance_pf_error_histograms(results)
     plt.close(figure)
+    print("\n" + "-" * 100 + "\n")
     figure = plot_nominal_vs_aged_pf_error_histograms(results)
     plt.close(figure)
+    print("\n" + "-" * 100 + "\n")
     figure = plot_hidden_aging_error_histograms(results)
     plt.close(figure)
 
