@@ -47,7 +47,7 @@ create an aged version. For example:
   --max-age 60 \
   --max-degradation 0.5 \
   --degradation-exponent 2 \
-  --seed 42 \
+  --seed 0 \
   --output grids/case118_aged.m
 ```
 
@@ -59,29 +59,29 @@ All five parameters shown above are configurable; the seed makes the sampled age
 reproducible. Transformer branches, out-of-service branches, and generator data
 remain unchanged. The command creates:
 
-- `grids/case118_aged_seed42_k2p5_scale40.m`: the aged network;
-- `grids/case118_aged_seed42_k2p5_scale40.json`: distribution settings, sampled ages, degradations,
+- `grids/case118_aged_seed0_k2p5_scale40.m`: the aged network;
+- `grids/case118_aged_seed0_k2p5_scale40.json`: distribution settings, sampled ages, degradations,
   and each eligible line's original and aged values;
-- `grids/case118_aged_seed42_k2p5_scale40_age_distribution.png`: a histogram of the
+- `grids/case118_aged_seed0_k2p5_scale40_age_distribution.png`: a histogram of the
   sampled ages of eligible bus-to-bus lines;
-- `grids/case118_aged_seed42_k2p5_scale40_weibull_distribution.pdf`: the theoretical
+- `grids/case118_aged_seed0_k2p5_scale40_weibull_distribution.pdf`: the theoretical
   right-truncated Weibull age probability density, normalized over 0–60 years;
 - `grids/case118_original.m`: the unmodified source network.
 
 The script appends the seed, Weibull shape (`k`) and scale to the base output
 filename. Decimal points become `p` so the matching MATPOWER function name is
 valid. Set `network.name` in the aged YAML configuration to the generated stem,
-for example `case118_aged_seed42_k2p5_scale40`.
+for example `case118_aged_seed0_k2p5_scale40`.
 
 Select another IEEE system with `--case` (14, 30, 57, or 118; default: 118).
 For example, from `src`:
 
 ```bash
-../venv/bin/python create_aged_network.py --case 57 --seed 42
+../venv/bin/python create_aged_network.py --case 57 --seed 0
 ```
 
 This selects `case57_ieee` and writes `grids/case57_original.m`,
-`grids/case57_aged_seed42_k2p5_scale40.m`, its JSON report, and its age histogram.
+`grids/case57_aged_seed0_k2p5_scale40.m`, its JSON report, and its age histogram.
 Without `--output`, the base filename is `grids/case<case>_aged.m`.
 An explicit `--output` still overrides that base path.
 
@@ -96,12 +96,13 @@ MATPOWER networks. Generate both datasets from `src`:
 ```
 
 Dataset size, random seed, perturbations, solver settings, and output directories are
-controlled by the corresponding YAML files. With `src` as the working directory,
-the current configurations write original data beneath
-`datakit_out/datakit_out_seed42/case118_original/raw/` and aged data beneath
-`datakit_out/datakit_out_seed4/case118_aged/raw/`. Datakit adds the network name
-and `raw` to `settings.data_dir`. When changing `settings.seed`, also update the
-seed suffix in `settings.data_dir`; it is a literal path, not a template.
+controlled by the corresponding YAML files. For the seed-0 examples, set
+`settings.seed: 0` and `settings.data_dir: "./datakit_out/case118/seed0"` in both
+IEEE-118 configs, and set the aged `network.name` to
+`case118_aged_seed0_k2p5_scale40`. For IEEE-57, use the `case57` configs and
+`./datakit_out/case57/seed0`. Datakit adds the network name and `raw` to
+`settings.data_dir`. When changing the seed, update the directory and aged
+network filename as well; YAML paths are literal, not templates.
 
 ### 4. Compare model errors
 
@@ -128,7 +129,7 @@ venv/bin/python src/aged_impedance_estimation.py --case 57 --seed 0
 
 The standalone script runs Section 7's projected Adam experiment and its plots;
 it excludes Section 8. `--case` accepts 14, 30, 57, or 118 (default: 118), and
-`--seed` selects the experiment seed (default: 42). The example reads from
+`--seed` selects the experiment seed (default: 0). The example reads from
 `src/datakit_out/case57/seed0/case57_original/` and
 `src/datakit_out/case57/seed0/case57_aged_seed0_k2p5_scale40/`.
 Changing the case or seed updates all paths automatically. Network generation
@@ -151,11 +152,11 @@ Existing IEEE-118 outputs in the old seed-only directories are not moved.
 ### 6. Replot saved results for the paper
 
 ```bash
-venv/bin/python src/paper_plots.py --seed 42
+venv/bin/python src/paper_plots.py --seed 0
 ```
 
 This loads the saved estimator and prediction tables from
-`src/results/local_predictions/seed42/`, without retraining or rerunning inference.
+`src/results/local_predictions/seed0/`, without retraining or rerunning inference.
 The first plotting method makes a two-panel Vm/Va error histogram with nominal
 impedance in red, aged impedance in green, and estimated impedance in blue.
 Both panels have legends. It saves

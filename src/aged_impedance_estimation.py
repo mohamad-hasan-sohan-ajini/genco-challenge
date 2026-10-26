@@ -158,8 +158,8 @@ def parse_args(argv=None):
     parser.add_argument(
         "--seed",
         type=int,
-        default=42,
-        help="Experiment and dataset seed (default: 42)",
+        default=0,
+        help="Experiment and dataset seed (default: 0)",
     )
     options = parser.parse_args(argv)
     if not 0 <= options.seed < 2**32:

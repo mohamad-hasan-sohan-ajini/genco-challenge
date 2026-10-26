@@ -1,6 +1,6 @@
 """Replot saved impedance-estimation results without rerunning the experiment.
 
-Run: venv/bin/python src/paper_plots.py --seed 42
+Run: venv/bin/python src/paper_plots.py --seed 0
 Each plotting method saves a title-free PDF beside its source result, adding
 _replot before the extension. Add calls to further plotting methods in main().
 """
@@ -49,7 +49,7 @@ class ExperimentResults:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--seed", type=int, default=42, help="Experiment seed (default: 42)"
+        "--seed", type=int, default=0, help="Experiment seed (default: 0)"
     )
     args = parser.parse_args(argv)
     if not 0 <= args.seed < 2**32:

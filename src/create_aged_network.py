@@ -77,8 +77,8 @@ def parse_args():
     parser.add_argument(
         "--seed",
         type=int,
-        default=42,
-        help="Random seed for sampling line ages (default: 42)",
+        default=0,
+        help="Random seed for sampling line ages (default: 0)",
     )
     parser.add_argument(
         "--output",
@@ -325,6 +325,6 @@ def main():
 
 if __name__ == "__main__":
     # example usage:
-    # python create_aged_network.py --seed 42 --output grids/case118_aged.m
-    # python create_aged_network.py --case 57 --seed 42
+    # python create_aged_network.py --seed 0 --output grids/case118_aged.m
+    # python create_aged_network.py --case 57 --seed 0
     main()
