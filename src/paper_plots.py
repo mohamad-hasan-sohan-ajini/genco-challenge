@@ -6,6 +6,7 @@ _replot before the extension. Add calls to further plotting methods in main().
 """
 
 import argparse
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -112,11 +113,20 @@ def plot_estimated_impedance_pf_error_histograms(results):
     Fractions sum to one within the displayed histogram range for each curve.
     """
     fig, axes = plt.subplots(1, 2, figsize=(12, 4), constrained_layout=True)
+    statistics = []
     for ax, (variable, (gt, prediction, unit)) in zip(axes, VOLTAGE_COLUMNS.items()):
         errors = {}
         for label, table in results.predictions.items():
             values = table[prediction].to_numpy(dtype=float) - table[gt].to_numpy(dtype=float)
             errors[label] = values[np.isfinite(values)]
+            statistics.append({
+                "Variable": variable,
+                "Case": label,
+                "Unit": unit,
+                "Count": errors[label].size,
+                "Mean": errors[label].mean(),
+                "Std": errors[label].std(ddof=0),
+            })
         bins = shared_histogram_bins(errors)
         for label, (_, color) in RUNS.items():
             counts, _ = np.histogram(errors[label], bins=bins)
@@ -133,6 +143,115 @@ def plot_estimated_impedance_pf_error_histograms(results):
     output_path = source_path.with_name(f"{source_path.stem}_replot{source_path.suffix}")
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Saved {output_path}")
+    print("\nSigned prediction-error statistics (all finite errors; population std, ddof=0):")
+    print(pd.DataFrame(statistics).to_string(index=False, float_format=lambda value: f"{value:.8g}"))
+    return fig
+
+
+def load_nominal_pf_predictions(results):
+    """Load or evaluate original-network PF with its own nominal impedance.
+
+    Unlike aged_comparison_original, this uses original PF observations and
+    original targets, not aged observations with substituted impedance.
+    """
+    path = results.directory / "case118_original_pf_ground_truth_predictions.parquet"
+    if path.is_file():
+        return pd.read_parquet(path)
+
+    # Lazy imports: existing replots do not need model/data loading.
+    import aged_impedance_estimation as experiment
+    from torch_geometric.data import Batch
+    from tqdm.auto import tqdm
+
+    config = json.loads((results.directory / "experiment_config.json").read_text())
+    root = Path(config["dataset_roots"]["case118_original"])
+    artifacts = {
+        name: experiment.hf_hub_download(
+            experiment.MODEL_REPO_ID, f"{experiment.RUN_DIR}/{filename}",
+            revision=experiment.MODEL_REVISION,
+        )
+        for name, filename in {
+            "config": "case118_250000.yaml",
+            "normalizer": "normalizer_stats.pt",
+            "checkpoint": "best_model_state_dict.pt",
+        }.items()
+    }
+    with open(artifacts["config"], encoding="utf-8") as handle:
+        args = experiment.NestedNamespace(**experiment.yaml.safe_load(handle))
+    normalizer = experiment.load_normalizer(args)
+    stats = torch.load(artifacts["normalizer"], map_location="cpu", weights_only=True)
+    normalizer.fit_from_dict(stats[experiment.NORMALIZER_NETWORK])
+    dataset = experiment.HeteroGridDatasetDisk(
+        root=str(root), data_normalizer=normalizer, transform=None,
+        stream_partitions=getattr(args.data, "stream_partitions", "auto"),
+    )
+    transform = experiment.get_task_transforms(args)
+    model = experiment.load_model(args)
+    state = torch.load(artifacts["checkpoint"], map_location="cpu", weights_only=True)
+    state = experiment._normalize_loaded_state_dict_keys(state)
+    model.load_state_dict({key.removeprefix("model."): value for key, value in state.items()})
+    model.to(experiment.DEVICE).eval()
+    indices = sorted(int(p.stem.removeprefix("data_index_"))
+                     for p in Path(dataset.processed_dir).glob("data_index_*.pt"))
+    if not indices:
+        raise ValueError(f"No original PF scenarios found in {root}")
+    frames = []
+    with torch.inference_mode():
+        for start in tqdm(range(0, len(indices), experiment.BATCH_SIZE), desc="Nominal PF baseline"):
+            batch_indices = indices[start:start + experiment.BATCH_SIZE]
+            graphs = [transform(dataset[index]) for index in batch_indices]
+            batch = Batch.from_data_list(graphs).to(experiment.DEVICE)
+            output = model(batch)
+            normalizer.inverse_output(output, batch)
+            normalizer.inverse_transform(batch)
+            prediction = output["bus"]
+            target = batch["bus"].y
+            ptr = batch["bus"].ptr.cpu().tolist()
+            for j, index in enumerate(batch_indices):
+                a, b = ptr[j:j + 2]
+                frames.append(pd.DataFrame({
+                    "dataset_index": index,
+                    "scenario_id": int(graphs[j].scenario_id.item()),
+                    "bus_index": np.arange(b - a),
+                    "vm_gt_pu": target[a:b, experiment.VM_H].cpu().numpy(),
+                    "vm_pred_pu": prediction[a:b, experiment.VM_OUT].cpu().numpy(),
+                    "va_gt_deg": torch.rad2deg(target[a:b, experiment.VA_H]).cpu().numpy(),
+                    "va_pred_deg": torch.rad2deg(prediction[a:b, experiment.VA_OUT]).cpu().numpy(),
+                }))
+    table = pd.concat(frames, ignore_index=True)
+    table.to_parquet(path, index=False)
+    print(f"Saved nominal PF baseline to {path}")
+    return table
+
+
+def plot_nominal_vs_aged_pf_error_histograms(results):
+    """Compare correctly specified original PF and aged PF error distributions."""
+    cases = {
+        "Nominal impedance and PF": (load_nominal_pf_predictions(results), "tab:blue"),
+        "Aged impedance and PF": (results.predictions["Aged impedance"], "tab:orange"),
+    }
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4), constrained_layout=True)
+    for ax, (variable, (gt, prediction, unit)) in zip(axes, VOLTAGE_COLUMNS.items()):
+        errors = {}
+        for label, (table, _) in cases.items():
+            if table.duplicated(KEY_COLUMNS).any():
+                raise ValueError(f"Duplicate prediction rows for {label}")
+            values = table[prediction].to_numpy(dtype=float) - table[gt].to_numpy(dtype=float)
+            errors[label] = values[np.isfinite(values)]
+        bins = shared_histogram_bins(errors)
+        for label, (_, color) in cases.items():
+            counts, _ = np.histogram(errors[label], bins=bins)
+            if not counts.sum():
+                raise ValueError(f"No displayed errors for {label}: {variable}")
+            ax.stairs(counts / counts.sum(), bins, label=label, color=color, linewidth=1.5)
+        ax.axvline(0, color="black", linewidth=0.8, alpha=0.6)
+        ax.set_xlabel(f"{variable} prediction error ({unit})")
+        ax.set_ylabel("Fraction of observations")
+        ax.grid(alpha=0.2)
+        ax.legend()
+    output_path = results.directory / "nominal_vs_aged_pf_error_histograms_replot.pdf"
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    print(f"Saved {output_path}")
     return fig
 
 
@@ -142,6 +261,8 @@ def main(argv=None):
 
     # Call each paper plotting method here; load the experiment only once.
     figure = plot_estimated_impedance_pf_error_histograms(results)
+    plt.close(figure)
+    figure = plot_nominal_vs_aged_pf_error_histograms(results)
     plt.close(figure)
 
 
