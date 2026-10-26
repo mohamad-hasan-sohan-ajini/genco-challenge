@@ -444,15 +444,17 @@ def print_impedance_error_reduction(curves):
 
 
 def plot_tensorboard_impedance_rmse():
-    """Overlay seeds 0–4, using raw logged epochs and one legend per panel."""
+    """Overlay seeds 0–4 and save separate reactance/resistance PDFs."""
     seeds = (0, 1, 2, 3, 4)
     curves = {seed: load_tensorboard_impedance_rmse(seed) for seed in seeds}
     panels = (
         ("epoch/reactance_mismatch_rmse", "Reactance mismatch RMSE (p.u.)"),
         ("epoch/resistance_mismatch_rmse", "Resistance mismatch RMSE (p.u.)"),
     )
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4), constrained_layout=True)
-    for ax, (tag, ylabel) in zip(axes, panels):
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    figures = []
+    for tag, ylabel in panels:
+        fig, ax = plt.subplots(figsize=(6, 4), constrained_layout=True)
         for seed in seeds:
             table = curves[seed][tag]
             ax.plot(
@@ -467,12 +469,13 @@ def plot_tensorboard_impedance_rmse():
         ax.grid(alpha=0.2)
         ax.legend(loc="upper right")
         ax.margins(x=0)
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = RESULTS_DIR / "impedance_mismatch_rmse_seeds0-4_replot.pdf"
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
-    print(f"Saved {output_path}")
+        component = tag.split("/")[-1].removesuffix("_mismatch_rmse")
+        output_path = RESULTS_DIR / f"{component}_mismatch_rmse_seeds0-4_replot.pdf"
+        fig.savefig(output_path, dpi=300, bbox_inches="tight")
+        print(f"Saved {output_path}")
+        figures.append(fig)
     print_impedance_error_reduction(curves)
-    return fig
+    return figures
 
 
 def plot_impedance_parity(results, component, symbol, zoom_max=None):
@@ -557,8 +560,8 @@ def main(argv=None):
     figure = plot_hidden_aging_error_histograms(results)
     plt.close(figure)
     print("\n" + "-" * 100 + "\n")
-    figure = plot_tensorboard_impedance_rmse()
-    plt.close(figure)
+    for figure in plot_tensorboard_impedance_rmse():
+        plt.close(figure)
     figure = plot_impedance_parity(results, "resistance", "R")
     plt.close(figure)
     figure = plot_impedance_parity(results, "reactance", "X")
