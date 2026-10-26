@@ -1,6 +1,6 @@
 """Replot saved impedance-estimation results without rerunning the experiment.
 
-Run: venv/bin/python src/paper_plots.py --seed 0
+Run: venv/bin/python src/paper_plots.py --case 57 --seed 0
 Each plotting method saves a title-free PDF beside its source result, adding
 _replot before the extension. Add calls to further plotting methods in main().
 """
@@ -19,8 +19,9 @@ import numpy as np
 import pandas as pd
 import torch
 
-RESULTS_DIR = Path(__file__).resolve().parent / "results" / "local_predictions"
-TB_DIR = Path(__file__).resolve().parent / "tb"
+PROJECT_DIR = Path(__file__).resolve().parent
+RESULTS_DIR = PROJECT_DIR / "results" / "local_predictions"  # Legacy IEEE-118 results.
+TB_DIR = PROJECT_DIR / "tb"
 KEY_COLUMNS = ["dataset_index", "scenario_id", "bus_index"]
 VOLTAGE_COLUMNS = {
     "Vm": ("vm_gt_pu", "vm_pred_pu", "p.u."),
@@ -44,10 +45,37 @@ class ExperimentResults:
     directory: Path
     checkpoint: dict
     predictions: dict
+    case: int = 118
+
+
+def results_root(case):
+    """Prefer the case-specific layout; retain legacy IEEE-118 access."""
+    root = PROJECT_DIR / "results" / f"case{case}"
+    if case == 118 and not root.exists() and RESULTS_DIR.is_dir():
+        return RESULTS_DIR
+    return root
+
+
+def experiment_directory(seed, case):
+    directory = PROJECT_DIR / "results" / f"case{case}" / f"seed{seed}"
+    legacy = RESULTS_DIR / f"seed{seed}"
+    if case == 118 and not directory.exists() and legacy.is_dir():
+        return legacy
+    return directory
+
+
+def tensorboard_directory(seed, case):
+    directory = TB_DIR / f"case{case}" / f"seed{seed}"
+    legacy = TB_DIR / f"seed{seed}"
+    if case == 118 and not directory.exists() and legacy.is_dir():
+        return legacy
+    return directory
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--case", type=int, choices=(14, 30, 57, 118), default=118,
+                        help="IEEE bus system (default: 118)")
     parser.add_argument(
         "--seed", type=int, default=0, help="Experiment seed (default: 0)"
     )
@@ -72,20 +100,22 @@ def validate_prediction_tables(tables):
                 raise ValueError(f"Ground truths differ for {label}: {gt_column}")
 
 
-def load_experiment_results(seed):
+def load_experiment_results(seed, case=118):
     """Load the saved estimator checkpoint and its existing PF predictions.
 
     The estimator currently saves its final state as denoised_admittance.pt;
     it does not save a separately ranked best checkpoint. Predictions are the
     three comparison tables exported by that estimation run.
     """
-    directory = RESULTS_DIR / f"seed{seed}"
+    directory = experiment_directory(seed, case)
     checkpoint_path = directory / "denoised_admittance.pt"
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f"Missing saved estimator: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     if checkpoint.get("seed", seed) != seed:
         raise ValueError(f"Checkpoint seed does not match requested seed {seed}")
+    if checkpoint.get("case", 118) != case:
+        raise ValueError(f"Checkpoint case does not match requested IEEE-{case}: {checkpoint_path}")
     columns = KEY_COLUMNS + [
         name
         for gt, prediction, _ in VOLTAGE_COLUMNS.values()
@@ -102,7 +132,7 @@ def load_experiment_results(seed):
             .reset_index(drop=True)
         )
     validate_prediction_tables(predictions)
-    return ExperimentResults(directory, checkpoint, predictions)
+    return ExperimentResults(directory, checkpoint, predictions, case=case)
 
 
 def shared_histogram_bins(errors):
@@ -135,7 +165,8 @@ def load_nominal_pf_predictions(results):
     Unlike aged_comparison_original, this uses original PF observations and
     original targets, not aged observations with substituted impedance.
     """
-    path = results.directory / "case118_original_pf_ground_truth_predictions.parquet"
+    original_name = f"case{results.case}_original"
+    path = results.directory / f"{original_name}_pf_ground_truth_predictions.parquet"
     if path.is_file():
         return pd.read_parquet(path)
 
@@ -145,24 +176,8 @@ def load_nominal_pf_predictions(results):
     from tqdm.auto import tqdm
 
     config = json.loads((results.directory / "experiment_config.json").read_text())
-    root = Path(config["dataset_roots"]["case118_original"])
-    artifacts = {
-        name: experiment.hf_hub_download(
-            experiment.MODEL_REPO_ID,
-            f"{experiment.RUN_DIR}/{filename}",
-            revision=experiment.MODEL_REVISION,
-        )
-        for name, filename in {
-            "config": "case118_250000.yaml",
-            "normalizer": "normalizer_stats.pt",
-            "checkpoint": "best_model_state_dict.pt",
-        }.items()
-    }
-    with open(artifacts["config"], encoding="utf-8") as handle:
-        args = experiment.NestedNamespace(**experiment.yaml.safe_load(handle))
-    normalizer = experiment.load_normalizer(args)
-    stats = torch.load(artifacts["normalizer"], map_location="cpu", weights_only=True)
-    normalizer.fit_from_dict(stats[experiment.NORMALIZER_NETWORK])
+    root = Path(config["dataset_roots"][original_name])
+    model, normalizer, args, _ = experiment.load_model_bundle(results.case)
     dataset = experiment.HeteroGridDatasetDisk(
         root=str(root),
         data_normalizer=normalizer,
@@ -170,13 +185,6 @@ def load_nominal_pf_predictions(results):
         stream_partitions=getattr(args.data, "stream_partitions", "auto"),
     )
     transform = experiment.get_task_transforms(args)
-    model = experiment.load_model(args)
-    state = torch.load(artifacts["checkpoint"], map_location="cpu", weights_only=True)
-    state = experiment._normalize_loaded_state_dict_keys(state)
-    model.load_state_dict(
-        {key.removeprefix("model."): value for key, value in state.items()}
-    )
-    model.to(experiment.DEVICE).eval()
     indices = sorted(
         int(p.stem.removeprefix("data_index_"))
         for p in Path(dataset.processed_dir).glob("data_index_*.pt")
@@ -192,7 +200,8 @@ def load_nominal_pf_predictions(results):
             graphs = [transform(dataset[index]) for index in batch_indices]
             batch = Batch.from_data_list(graphs).to(experiment.DEVICE)
             output = model(batch)
-            normalizer.inverse_output(output, batch)
+            if output["bus"].size(1) > max(experiment.PG_OUT, experiment.QG_OUT):
+                normalizer.inverse_output(output, batch)
             normalizer.inverse_transform(batch)
             prediction = output["bus"]
             target = batch["bus"].y
@@ -300,12 +309,12 @@ def _plot_pf_error_comparison(results, cases, filename):
     return fig
 
 
-def load_tensorboard_impedance_rmse(seed):
+def load_tensorboard_impedance_rmse(seed, case=118):
     """Read every scalar point from the latest run containing both RMSE tags."""
     from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
     tags = ("epoch/reactance_mismatch_rmse", "epoch/resistance_mismatch_rmse")
-    seed_dir = TB_DIR / f"seed{seed}"
+    seed_dir = tensorboard_directory(seed, case)
     run_dirs = sorted(
         {path.parent for path in seed_dir.rglob("events.out.tfevents.*")}, reverse=True
     )
@@ -337,21 +346,23 @@ def load_tensorboard_impedance_rmse(seed):
             if not np.isfinite(table["value"]).all():
                 raise ValueError(f"Non-finite TensorBoard values: {run_dir}: {tag}")
             curves[tag] = table
-        print(f"TensorBoard seed {seed}: {run_dir}")
+        print(f"TensorBoard IEEE-{case}, seed {seed}: {run_dir}")
         return curves
     raise FileNotFoundError(
         f"No TensorBoard run with both impedance RMSE tags in {seed_dir}"
     )
 
 
-def print_impedance_error_reduction(curves):
+def print_impedance_error_reduction(curves, case=118):
     """Compare nominal and final estimated impedances to the same aged truth."""
     absolute_rows, relative_rows = [], []
     for seed, series in curves.items():
-        path = RESULTS_DIR / f"seed{seed}" / "denoised_admittance.pt"
+        path = experiment_directory(seed, case) / "denoised_admittance.pt"
         checkpoint = torch.load(path, map_location="cpu", weights_only=True)
         if checkpoint.get("seed", seed) != seed:
             raise ValueError(f"Checkpoint seed mismatch: {path}")
+        if checkpoint.get("case", 118) != case:
+            raise ValueError(f"Checkpoint case mismatch: {path}")
         mask = checkpoint["learnable_line_mask"].bool()
         for component, symbol in (("reactance", "X"), ("resistance", "R")):
             actual, nominal, estimated = [
@@ -443,15 +454,28 @@ def print_impedance_error_reduction(curves):
     )
 
 
-def plot_tensorboard_impedance_rmse():
-    """Overlay seeds 0–4 and save separate reactance/resistance PDFs."""
-    seeds = (0, 1, 2, 3, 4)
-    curves = {seed: load_tensorboard_impedance_rmse(seed) for seed in seeds}
+def plot_tensorboard_impedance_rmse(case=118):
+    """Overlay available seeds 0–4 for one case in separate R/X PDFs."""
+    curves = {}
+    for seed in (0, 1, 2, 3, 4):
+        if not (experiment_directory(seed, case) / "denoised_admittance.pt").is_file():
+            print(f"Skipping IEEE-{case}, seed {seed}: no saved impedance checkpoint")
+            continue
+        try:
+            curves[seed] = load_tensorboard_impedance_rmse(seed, case)
+        except FileNotFoundError as error:
+            print(f"Skipping IEEE-{case}, seed {seed}: {error}")
+    if not curves:
+        print(f"No TensorBoard curves available for IEEE-{case}; skipping convergence plots.")
+        return []
+    seeds = tuple(curves)
+    seed_label = "0-4" if seeds == (0, 1, 2, 3, 4) else "-".join(map(str, seeds))
     panels = (
         ("epoch/reactance_mismatch_rmse", "Reactance mismatch RMSE (p.u.)"),
         ("epoch/resistance_mismatch_rmse", "Resistance mismatch RMSE (p.u.)"),
     )
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    output_root = results_root(case)
+    output_root.mkdir(parents=True, exist_ok=True)
     figures = []
     for tag, ylabel in panels:
         fig, ax = plt.subplots(figsize=(6, 4), constrained_layout=True)
@@ -470,11 +494,11 @@ def plot_tensorboard_impedance_rmse():
         ax.legend(loc="upper right")
         ax.margins(x=0)
         component = tag.split("/")[-1].removesuffix("_mismatch_rmse")
-        output_path = RESULTS_DIR / f"{component}_mismatch_rmse_seeds0-4_replot.pdf"
+        output_path = output_root / f"{component}_mismatch_rmse_seeds{seed_label}_replot.pdf"
         fig.savefig(output_path, dpi=300, bbox_inches="tight")
         print(f"Saved {output_path}")
         figures.append(fig)
-    print_impedance_error_reduction(curves)
+    print_impedance_error_reduction(curves, case)
     return figures
 
 
@@ -548,7 +572,7 @@ def plot_impedance_parity(results, component, symbol, zoom_max=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    results = load_experiment_results(args.seed)
+    results = load_experiment_results(args.seed, args.case)
 
     # Call each paper plotting method here; load the experiment only once.
     figure = plot_estimated_impedance_pf_error_histograms(results)
@@ -560,7 +584,7 @@ def main(argv=None):
     figure = plot_hidden_aging_error_histograms(results)
     plt.close(figure)
     print("\n" + "-" * 100 + "\n")
-    for figure in plot_tensorboard_impedance_rmse():
+    for figure in plot_tensorboard_impedance_rmse(args.case):
         plt.close(figure)
     figure = plot_impedance_parity(results, "resistance", "R")
     plt.close(figure)

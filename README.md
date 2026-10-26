@@ -152,11 +152,15 @@ Existing IEEE-118 outputs in the old seed-only directories are not moved.
 ### 6. Replot saved results for the paper
 
 ```bash
-venv/bin/python src/paper_plots.py --seed 0
+venv/bin/python src/paper_plots.py --case 57 --seed 0
 ```
 
+`--case` accepts 14, 30, 57, or 118 (default: 118); the default seed is 0.
 This loads the saved estimator and prediction tables from
-`src/results/local_predictions/seed0/`, without retraining or rerunning inference.
+`src/results/case57/seed0/` without retraining. Original-network inference is
+only needed if its cached nominal PF prediction table is missing. Legacy
+IEEE-118 results under `src/results/local_predictions/seed0/` remain supported
+when the corresponding new case-specific directory is absent.
 The first plotting method makes a two-panel Vm/Va error histogram with nominal
 impedance in red, aged impedance in green, and estimated impedance in blue.
 Both panels have legends. It saves
@@ -168,17 +172,21 @@ against aged PF observations with aged impedance (green), with
 Vm/Va panels and a legend on each. This is saved as
 `nominal_vs_aged_pf_error_histograms_replot.pdf`. On its first run, the original
 PF baseline is evaluated with the saved GENCO checkpoint and cached as
-`case118_original_pf_ground_truth_predictions.parquet` in the seed's results
+`case57_original_pf_ground_truth_predictions.parquet` in the seed's results
 directory; subsequent runs reuse that table.
 
 All three figures and their printed statistics use the same case names and
 colours: nominal impedance + aged PF (red), aged impedance + aged PF (green),
 estimated impedance + aged PF (blue), and nominal impedance + nominal PF (orange).
 
-`plot_tensorboard_impedance_rmse()` also reads seeds 0–4 from `src/tb/seedXX/`
+`plot_tensorboard_impedance_rmse(case)` also reads seeds 0–4 from
+`src/tb/case57/seedXX/` for this example
 and plots the logged reactance and resistance mismatch RMSE against epoch, with
-five seed curves and an upper-right legend in each panel. It selects the latest
+seed curves and an upper-right legend in each panel. It selects the latest
 run containing both tags for each seed and uses all raw logged points, without
-TensorBoard smoothing or downsampling. Separate figures are saved under
-`src/results/local_predictions/` as `reactance_mismatch_rmse_seeds0-4_replot.pdf`
-and `resistance_mismatch_rmse_seeds0-4_replot.pdf`.
+TensorBoard smoothing or downsampling. Seeds with missing logs or checkpoints
+are reported and skipped. Separate figures are saved under `src/results/case57/`
+as `reactance_mismatch_rmse_seeds0-4_replot.pdf` and
+`resistance_mismatch_rmse_seeds0-4_replot.pdf` when all five seeds are present;
+otherwise their filenames list the included seeds. Legacy IEEE-118 logs under
+`src/tb/seedXX/` are also supported.
