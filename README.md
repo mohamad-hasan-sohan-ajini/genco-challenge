@@ -58,12 +58,26 @@ remain unchanged. The command creates:
   and each eligible line's original and aged values;
 - `grids/case118_aged_seed42_k2p5_scale40_age_distribution.png`: a histogram of the
   sampled ages of eligible bus-to-bus lines;
+- `grids/case118_aged_seed42_k2p5_scale40_weibull_distribution.pdf`: the theoretical
+  right-truncated Weibull age probability density, normalized over 0–60 years;
 - `grids/case118_original.m`: the unmodified source network.
 
 The script appends the seed, Weibull shape (`k`) and scale to the base output
 filename. Decimal points become `p` so the matching MATPOWER function name is
 valid. Set `network.name` in the aged YAML configuration to the generated stem,
 for example `case118_aged_seed42_k2p5_scale40`.
+
+Select another IEEE system with `--case` (14, 30, 57, or 118; default: 118).
+For example, from `src`:
+
+```bash
+../venv/bin/python create_aged_network.py --case 57 --seed 42
+```
+
+This selects `case57_ieee` and writes `grids/case57_original.m`,
+`grids/case57_aged_seed42_k2p5_scale40.m`, its JSON report, and its age histogram.
+Without `--output`, the base filename is `grids/case<case>_aged.m`.
+An explicit `--output` still overrides that base path.
 
 ## 3. Generate the original and aged datasets
 
@@ -151,5 +165,6 @@ estimated impedance + aged PF (blue), and nominal impedance + nominal PF (orange
 and plots the logged reactance and resistance mismatch RMSE against epoch, with
 five seed curves and an upper-right legend in each panel. It selects the latest
 run containing both tags for each seed and uses all raw logged points, without
-TensorBoard smoothing or downsampling. The combined figure is saved as
-`src/results/local_predictions/impedance_mismatch_rmse_seeds0-4_replot.pdf`.
+TensorBoard smoothing or downsampling. Separate figures are saved under
+`src/results/local_predictions/` as `reactance_mismatch_rmse_seeds0-4_replot.pdf`
+and `resistance_mismatch_rmse_seeds0-4_replot.pdf`.

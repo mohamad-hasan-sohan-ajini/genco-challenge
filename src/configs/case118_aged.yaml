@@ -37,7 +37,7 @@ admittance_perturbation:
 
 settings:
   num_processes: 8 # Number of parallel processes to use
-  data_dir: "./datakit_out/datakit_out_seed42" # Keep suffix in sync with settings.seed; relative to the working directory
+  data_dir: "./datakit_out/case118/seed42" # Network-specific folder; keep seed directory in sync with settings.seed
   large_chunk_size: 250 # Number of load scenarios processed before saving
   overwrite: true # If true, overwrites existing files, if false, appends to files
   mode: "pf" # Mode of the script; options: pf, opf. pf: power flow data where one or more operating limits – the inequality constraints defined in OPF, e.g., voltage magnitude or branch limits – may be violated. opf:  generates datapoints for training OPF solvers, with cost-optimal dispatches that satisfy all operating limits (OPF-feasible)
