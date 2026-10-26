@@ -134,3 +134,22 @@ impedance in red, aged impedance in green, and estimated impedance in blue.
 Both panels have legends. It saves
 `estimated_impedance_pf_error_histograms_replot.pdf` beside the original plot,
 at 300 DPI with no titles. Add further plotting-method calls in `main()`.
+
+The script also plots original PF observations with nominal impedance (orange)
+against aged PF observations with aged impedance (green), with
+Vm/Va panels and a legend on each. This is saved as
+`nominal_vs_aged_pf_error_histograms_replot.pdf`. On its first run, the original
+PF baseline is evaluated with the saved GENCO checkpoint and cached as
+`case118_original_pf_ground_truth_predictions.parquet` in the seed's results
+directory; subsequent runs reuse that table.
+
+All three figures and their printed statistics use the same case names and
+colours: nominal impedance + aged PF (red), aged impedance + aged PF (green),
+estimated impedance + aged PF (blue), and nominal impedance + nominal PF (orange).
+
+`plot_tensorboard_impedance_rmse()` also reads seeds 0–4 from `src/tb/seedXX/`
+and plots the logged reactance and resistance mismatch RMSE against epoch, with
+five seed curves and an upper-right legend in each panel. It selects the latest
+run containing both tags for each seed and uses all raw logged points, without
+TensorBoard smoothing or downsampling. The combined figure is saved as
+`src/results/local_predictions/impedance_mismatch_rmse_seeds0-4_replot.pdf`.
