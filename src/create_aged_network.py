@@ -20,7 +20,6 @@ from gridfm_datakit.network import get_pglib_source_path
 BRANCH_RE = re.compile(r"(mpc\.branch\s*=\s*\[)(.*?)(\];)", re.DOTALL)
 NUMBER_RE = re.compile(r"[^\s;]+")
 FUNCTION_RE = re.compile(r"(?m)^(\s*function\s+mpc\s*=\s*)[A-Za-z]\w*")
-ORIGINAL_NETWORK_NAME = "case118_original"
 AGED_EDGE_TYPE = ("bus", "connects", "bus")
 
 
@@ -38,6 +37,13 @@ def set_matpower_function_name(contents, name):
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--case",
+        type=int,
+        choices=(14, 30, 57, 118),
+        default=118,
+        help="IEEE bus system to age (default: 118)",
+    )
     parser.add_argument(
         "--weibull-shape",
         type=float,
@@ -77,10 +83,11 @@ def parse_args():
     parser.add_argument(
         "--output",
         type=Path,
-        required=True,
-        help="Base output .m filename; seed, Weibull shape and scale are appended",
+        help="Base output filename (default: grids/case<case>_aged.m); seed, shape and scale are appended",
     )
     args = parser.parse_args()
+    if args.output is None:
+        args.output = Path("grids") / f"case{args.case}_aged.m"
     for name in ("weibull_shape", "weibull_scale", "max_age", "degradation_exponent"):
         value = getattr(args, name)
         if not math.isfinite(value) or value <= 0:
@@ -161,13 +168,46 @@ def plot_age_distribution(changes, output_path):
     return fig
 
 
+def plot_weibull_distribution(changes, output_path):
+    """Plot the theoretical conditional age PDF, independent of sampled lines."""
+    import numpy as np
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    shape = changes["weibull_shape"]
+    scale = changes["weibull_scale_years"]
+    maximum = changes["age_range_years"][1]
+    probability = -math.expm1(-((maximum / scale) ** shape))
+    ages = np.linspace(0, maximum, 2001)
+    # For k < 1 the PDF diverges at zero; plot positive ages rather than cap it.
+    if shape < 1:
+        ages = ages[1:]
+    density = (shape / scale) * (ages / scale) ** (shape - 1) * np.exp(
+        -((ages / scale) ** shape)
+    ) / probability
+
+    fig = Figure(figsize=(7, 4), layout="constrained")
+    FigureCanvasAgg(fig)
+    ax = fig.subplots()
+    ax.plot(ages, density, color="tab:blue", linewidth=2)
+    ax.set_xlim(0, maximum)
+    ax.set_ylim(bottom=0)
+    ax.set_xlabel("Age (years)")
+    ax.set_ylabel("Probability density (1/year)")
+    ax.grid(alpha=0.25)
+    fig.savefig(output_path, dpi=300)
+    return fig
+
+
 def main():
     args = parse_args()
+    original_network_name = f"case{args.case}_original"
+    source_network_name = f"case{args.case}_ieee"
     output_path = parameterized_output_path(
         args.output, args.seed, args.weibull_shape, args.weibull_scale
     )
 
-    source = Path(get_pglib_source_path("case118_ieee"))
+    source = Path(get_pglib_source_path(source_network_name))
 
     original = source.read_text()
     # Only this table maps to AGED_EDGE_TYPE. Do not edit mpc.bus or mpc.gen.
@@ -245,18 +285,20 @@ def main():
     amended = original[: match.start(2)] + "".join(lines) + original[match.end(2) :]
     amended = set_matpower_function_name(amended, output_path.stem)
 
-    original_output = args.output.with_name(f"{ORIGINAL_NETWORK_NAME}.m")
+    original_output = args.output.with_name(f"{original_network_name}.m")
     if original_output == args.output:
         raise ValueError(
-            f"The aged output cannot be named {ORIGINAL_NETWORK_NAME}.m because "
+            f"The aged output cannot be named {original_network_name}.m because "
             "that filename is reserved for the original network"
         )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(amended)
     original_output.write_text(
-        set_matpower_function_name(original, ORIGINAL_NETWORK_NAME)
+        set_matpower_function_name(original, original_network_name)
     )
     changes = {
+        "case": args.case,
+        "source_network": source_network_name,
         "network_file": output_path.name,
         "original_network_file": original_output.name,
         "affected_edge_type": list(AGED_EDGE_TYPE),
@@ -272,12 +314,17 @@ def main():
     age_plot_path = output_path.with_name(f"{output_path.stem}_age_distribution.png")
     changes["age_distribution_plot"] = age_plot_path.name
     plot_age_distribution(changes, age_plot_path)
+    weibull_plot_path = output_path.with_name(f"{output_path.stem}_weibull_distribution.pdf")
+    changes["weibull_distribution_plot"] = weibull_plot_path.name
+    plot_weibull_distribution(changes, weibull_plot_path)
     output_path.with_suffix(".json").write_text(json.dumps(changes, indent=2) + "\n")
     print(f"Saved aged network to {output_path}")
     print(f"Saved line age distribution to {age_plot_path}")
+    print(f"Saved theoretical Weibull distribution to {weibull_plot_path}")
 
 
 if __name__ == "__main__":
     # example usage:
     # python create_aged_network.py --seed 42 --output grids/case118_aged.m
+    # python create_aged_network.py --case 57 --seed 42
     main()
