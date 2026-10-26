@@ -5,7 +5,13 @@ reactance affect the errors produced by a pretrained GENCO power-flow model. The
 workflow creates an aged IEEE 118-bus network, generates comparable datasets for the
 original and aged networks, and compares their prediction-error distributions.
 
-## 1. Install GridFM Datakit and GraphKit
+## 1. Paper
+
+[Read the paper (PDF)](GridFM__to_estimate_Aged_grid_Admittance_Matrix.pdf).
+
+## 2. How to run the code
+
+### 1. Install GridFM Datakit and GraphKit
 
 Python 3.10, 3.11, or 3.12 is recommended. From the repository root, create a virtual
 environment and install the two GridFM packages:
@@ -23,7 +29,7 @@ Set up the Julia packages used by GridFM Datakit's PowerModels solver:
 gridfm_datakit setup_pm
 ```
 
-## 2. Create the aged network
+### 2. Create the aged network
 
 The remaining commands assume the working directory is `src`:
 
@@ -79,7 +85,7 @@ This selects `case57_ieee` and writes `grids/case57_original.m`,
 Without `--output`, the base filename is `grids/case<case>_aged.m`.
 An explicit `--output` still overrides that base path.
 
-## 3. Generate the original and aged datasets
+### 3. Generate the original and aged datasets
 
 The two configurations use the same data-generation procedure but load different
 MATPOWER networks. Generate both datasets from `src`:
@@ -97,7 +103,7 @@ the current configurations write original data beneath
 and `raw` to `settings.data_dir`. When changing `settings.seed`, also update the
 seed suffix in `settings.data_dir`; it is a literal path, not a template.
 
-## 4. Compare model errors
+### 4. Compare model errors
 
 Open `1_error_dist.ipynb` and run all cells to evaluate the original and aged datasets
 and plot their error distributions:
@@ -112,7 +118,7 @@ the pretrained checkpoint and normalizer, evaluates both datasets, saves predict
 tables under `results/local_predictions`, and plots the original-versus-aged error
 distributions.
 
-## 5. Run impedance estimation without the notebook
+### 5. Run impedance estimation without the notebook
 
 From the repository root:
 
@@ -142,7 +148,7 @@ using the Base model with training seed 0 independently of the experiment seed.
 Older configs are converted in memory for the installed Graphkit version.
 Existing IEEE-118 outputs in the old seed-only directories are not moved.
 
-## 6. Replot saved results for the paper
+### 6. Replot saved results for the paper
 
 ```bash
 venv/bin/python src/paper_plots.py --seed 42
