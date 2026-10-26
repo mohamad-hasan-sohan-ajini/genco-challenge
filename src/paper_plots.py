@@ -21,6 +21,7 @@ import torch
 
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results" / "local_predictions"
+TB_DIR = Path(__file__).resolve().parent / "tb"
 KEY_COLUMNS = ["dataset_index", "scenario_id", "bus_index"]
 VOLTAGE_COLUMNS = {
     "Vm": ("vm_gt_pu", "vm_pred_pu", "p.u."),
@@ -261,6 +262,64 @@ def _plot_pf_error_comparison(results, cases, filename):
     return fig
 
 
+def load_tensorboard_impedance_rmse(seed):
+    """Read every scalar point from the latest run containing both RMSE tags."""
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+    tags = ("epoch/reactance_mismatch_rmse", "epoch/resistance_mismatch_rmse")
+    seed_dir = TB_DIR / f"seed{seed}"
+    run_dirs = sorted({path.parent for path in seed_dir.rglob("events.out.tfevents.*")},
+                      reverse=True)
+    for run_dir in run_dirs:
+        events = EventAccumulator(str(run_dir), size_guidance={"scalars": 0})
+        events.Reload()
+        if not all(tag in events.Tags().get("scalars", []) for tag in tags):
+            continue
+        curves = {}
+        for tag in tags:
+            table = pd.DataFrame([
+                {"epoch": event.step, "value": event.value, "wall_time": event.wall_time}
+                for event in events.Scalars(tag)
+            ])
+            if table.empty:
+                raise ValueError(f"Empty TensorBoard series: {run_dir}: {tag}")
+            # In case a resumed run logs the same step again, retain its latest value.
+            table = (table.sort_values("wall_time", kind="stable")
+                     .drop_duplicates("epoch", keep="last").sort_values("epoch"))
+            if not np.isfinite(table["value"]).all():
+                raise ValueError(f"Non-finite TensorBoard values: {run_dir}: {tag}")
+            curves[tag] = table
+        print(f"TensorBoard seed {seed}: {run_dir}")
+        return curves
+    raise FileNotFoundError(f"No TensorBoard run with both impedance RMSE tags in {seed_dir}")
+
+
+def plot_tensorboard_impedance_rmse():
+    """Overlay seeds 0–4, using raw logged epochs and one legend per panel."""
+    seeds = (0, 1, 2, 3, 4)
+    curves = {seed: load_tensorboard_impedance_rmse(seed) for seed in seeds}
+    panels = (
+        ("epoch/reactance_mismatch_rmse", "Reactance mismatch RMSE (p.u.)"),
+        ("epoch/resistance_mismatch_rmse", "Resistance mismatch RMSE (p.u.)"),
+    )
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4), constrained_layout=True)
+    for ax, (tag, ylabel) in zip(axes, panels):
+        for seed in seeds:
+            table = curves[seed][tag]
+            ax.plot(table["epoch"], table["value"], color=f"C{seed}",
+                    linewidth=1.5, label=f"Seed {seed}")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel(ylabel)
+        ax.grid(alpha=0.2)
+        ax.legend(loc="upper right")
+        ax.margins(x=0)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = RESULTS_DIR / "impedance_mismatch_rmse_seeds0-4_replot.pdf"
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    print(f"Saved {output_path}")
+    return fig
+
+
 def main(argv=None):
     args = parse_args(argv)
     results = load_experiment_results(args.seed)
@@ -273,6 +332,9 @@ def main(argv=None):
     plt.close(figure)
     print("\n" + "-" * 100 + "\n")
     figure = plot_hidden_aging_error_histograms(results)
+    plt.close(figure)
+    print("\n" + "-" * 100 + "\n")
+    figure = plot_tensorboard_impedance_rmse()
     plt.close(figure)
 
 
