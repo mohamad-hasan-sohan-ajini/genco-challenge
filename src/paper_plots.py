@@ -19,7 +19,6 @@ import numpy as np
 import pandas as pd
 import torch
 
-
 RESULTS_DIR = Path(__file__).resolve().parent / "results" / "local_predictions"
 TB_DIR = Path(__file__).resolve().parent / "tb"
 KEY_COLUMNS = ["dataset_index", "scenario_id", "bus_index"]
@@ -49,7 +48,9 @@ class ExperimentResults:
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--seed", type=int, default=42, help="Experiment seed (default: 42)")
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Experiment seed (default: 42)"
+    )
     args = parser.parse_args(argv)
     if not 0 <= args.seed < 2**32:
         parser.error("--seed must be between 0 and 2**32 - 1")
@@ -86,7 +87,9 @@ def load_experiment_results(seed):
     if checkpoint.get("seed", seed) != seed:
         raise ValueError(f"Checkpoint seed does not match requested seed {seed}")
     columns = KEY_COLUMNS + [
-        name for gt, prediction, _ in VOLTAGE_COLUMNS.values() for name in (gt, prediction)
+        name
+        for gt, prediction, _ in VOLTAGE_COLUMNS.values()
+        for name in (gt, prediction)
     ]
     predictions = {}
     for label, run in RUNS.items():
@@ -120,7 +123,9 @@ def plot_estimated_impedance_pf_error_histograms(results):
     Fractions sum to one within the displayed histogram range for each curve.
     """
     return _plot_pf_error_comparison(
-        results, results.predictions, "estimated_impedance_pf_error_histograms_replot.pdf"
+        results,
+        results.predictions,
+        "estimated_impedance_pf_error_histograms_replot.pdf",
     )
 
 
@@ -143,7 +148,8 @@ def load_nominal_pf_predictions(results):
     root = Path(config["dataset_roots"]["case118_original"])
     artifacts = {
         name: experiment.hf_hub_download(
-            experiment.MODEL_REPO_ID, f"{experiment.RUN_DIR}/{filename}",
+            experiment.MODEL_REPO_ID,
+            f"{experiment.RUN_DIR}/{filename}",
             revision=experiment.MODEL_REVISION,
         )
         for name, filename in {
@@ -158,23 +164,31 @@ def load_nominal_pf_predictions(results):
     stats = torch.load(artifacts["normalizer"], map_location="cpu", weights_only=True)
     normalizer.fit_from_dict(stats[experiment.NORMALIZER_NETWORK])
     dataset = experiment.HeteroGridDatasetDisk(
-        root=str(root), data_normalizer=normalizer, transform=None,
+        root=str(root),
+        data_normalizer=normalizer,
+        transform=None,
         stream_partitions=getattr(args.data, "stream_partitions", "auto"),
     )
     transform = experiment.get_task_transforms(args)
     model = experiment.load_model(args)
     state = torch.load(artifacts["checkpoint"], map_location="cpu", weights_only=True)
     state = experiment._normalize_loaded_state_dict_keys(state)
-    model.load_state_dict({key.removeprefix("model."): value for key, value in state.items()})
+    model.load_state_dict(
+        {key.removeprefix("model."): value for key, value in state.items()}
+    )
     model.to(experiment.DEVICE).eval()
-    indices = sorted(int(p.stem.removeprefix("data_index_"))
-                     for p in Path(dataset.processed_dir).glob("data_index_*.pt"))
+    indices = sorted(
+        int(p.stem.removeprefix("data_index_"))
+        for p in Path(dataset.processed_dir).glob("data_index_*.pt")
+    )
     if not indices:
         raise ValueError(f"No original PF scenarios found in {root}")
     frames = []
     with torch.inference_mode():
-        for start in tqdm(range(0, len(indices), experiment.BATCH_SIZE), desc="Nominal PF baseline"):
-            batch_indices = indices[start:start + experiment.BATCH_SIZE]
+        for start in tqdm(
+            range(0, len(indices), experiment.BATCH_SIZE), desc="Nominal PF baseline"
+        ):
+            batch_indices = indices[start : start + experiment.BATCH_SIZE]
             graphs = [transform(dataset[index]) for index in batch_indices]
             batch = Batch.from_data_list(graphs).to(experiment.DEVICE)
             output = model(batch)
@@ -184,16 +198,28 @@ def load_nominal_pf_predictions(results):
             target = batch["bus"].y
             ptr = batch["bus"].ptr.cpu().tolist()
             for j, index in enumerate(batch_indices):
-                a, b = ptr[j:j + 2]
-                frames.append(pd.DataFrame({
-                    "dataset_index": index,
-                    "scenario_id": int(graphs[j].scenario_id.item()),
-                    "bus_index": np.arange(b - a),
-                    "vm_gt_pu": target[a:b, experiment.VM_H].cpu().numpy(),
-                    "vm_pred_pu": prediction[a:b, experiment.VM_OUT].cpu().numpy(),
-                    "va_gt_deg": torch.rad2deg(target[a:b, experiment.VA_H]).cpu().numpy(),
-                    "va_pred_deg": torch.rad2deg(prediction[a:b, experiment.VA_OUT]).cpu().numpy(),
-                }))
+                a, b = ptr[j : j + 2]
+                frames.append(
+                    pd.DataFrame(
+                        {
+                            "dataset_index": index,
+                            "scenario_id": int(graphs[j].scenario_id.item()),
+                            "bus_index": np.arange(b - a),
+                            "vm_gt_pu": target[a:b, experiment.VM_H].cpu().numpy(),
+                            "vm_pred_pu": prediction[a:b, experiment.VM_OUT]
+                            .cpu()
+                            .numpy(),
+                            "va_gt_deg": torch.rad2deg(target[a:b, experiment.VA_H])
+                            .cpu()
+                            .numpy(),
+                            "va_pred_deg": torch.rad2deg(
+                                prediction[a:b, experiment.VA_OUT]
+                            )
+                            .cpu()
+                            .numpy(),
+                        }
+                    )
+                )
     table = pd.concat(frames, ignore_index=True)
     table.to_parquet(path, index=False)
     print(f"Saved nominal PF baseline to {path}")
@@ -232,23 +258,29 @@ def _plot_pf_error_comparison(results, cases, filename):
             label, _ = CASE_STYLES[case]
             if table.duplicated(KEY_COLUMNS).any():
                 raise ValueError(f"Duplicate prediction rows for {label}")
-            values = table[prediction].to_numpy(dtype=float) - table[gt].to_numpy(dtype=float)
+            values = table[prediction].to_numpy(dtype=float) - table[gt].to_numpy(
+                dtype=float
+            )
             errors[case] = values[np.isfinite(values)]
-            statistics.append({
-                "Variable": variable,
-                "Case": label,
-                "Unit": unit,
-                "Count": errors[case].size,
-                "Mean": errors[case].mean(),
-                "Std": errors[case].std(ddof=0),
-            })
+            statistics.append(
+                {
+                    "Variable": variable,
+                    "Case": label,
+                    "Unit": unit,
+                    "Count": errors[case].size,
+                    "Mean": errors[case].mean(),
+                    "Std": errors[case].std(ddof=0),
+                }
+            )
         bins = shared_histogram_bins(errors)
         for case in cases:
             label, color = CASE_STYLES[case]
             counts, _ = np.histogram(errors[case], bins=bins)
             if not counts.sum():
                 raise ValueError(f"No displayed errors for {label}: {variable}")
-            ax.stairs(counts / counts.sum(), bins, label=label, color=color, linewidth=1.5)
+            ax.stairs(
+                counts / counts.sum(), bins, label=label, color=color, linewidth=1.5
+            )
         ax.axvline(0, color="black", linewidth=0.8, alpha=0.6)
         ax.set_xlabel(f"{variable} prediction error ({unit})")
         ax.set_ylabel("Fraction of observations")
@@ -257,8 +289,14 @@ def _plot_pf_error_comparison(results, cases, filename):
     output_path = results.directory / filename
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Saved {output_path}")
-    print("\nSigned prediction-error statistics (all finite errors; population std, ddof=0):")
-    print(pd.DataFrame(statistics).to_string(index=False, float_format=lambda value: f"{value:.8g}"))
+    print(
+        "\nSigned prediction-error statistics (all finite errors; population std, ddof=0):"
+    )
+    print(
+        pd.DataFrame(statistics).to_string(
+            index=False, float_format=lambda value: f"{value:.8g}"
+        )
+    )
     return fig
 
 
@@ -268,8 +306,9 @@ def load_tensorboard_impedance_rmse(seed):
 
     tags = ("epoch/reactance_mismatch_rmse", "epoch/resistance_mismatch_rmse")
     seed_dir = TB_DIR / f"seed{seed}"
-    run_dirs = sorted({path.parent for path in seed_dir.rglob("events.out.tfevents.*")},
-                      reverse=True)
+    run_dirs = sorted(
+        {path.parent for path in seed_dir.rglob("events.out.tfevents.*")}, reverse=True
+    )
     for run_dir in run_dirs:
         events = EventAccumulator(str(run_dir), size_guidance={"scalars": 0})
         events.Reload()
@@ -277,21 +316,32 @@ def load_tensorboard_impedance_rmse(seed):
             continue
         curves = {}
         for tag in tags:
-            table = pd.DataFrame([
-                {"epoch": event.step, "value": event.value, "wall_time": event.wall_time}
-                for event in events.Scalars(tag)
-            ])
+            table = pd.DataFrame(
+                [
+                    {
+                        "epoch": event.step,
+                        "value": event.value,
+                        "wall_time": event.wall_time,
+                    }
+                    for event in events.Scalars(tag)
+                ]
+            )
             if table.empty:
                 raise ValueError(f"Empty TensorBoard series: {run_dir}: {tag}")
             # In case a resumed run logs the same step again, retain its latest value.
-            table = (table.sort_values("wall_time", kind="stable")
-                     .drop_duplicates("epoch", keep="last").sort_values("epoch"))
+            table = (
+                table.sort_values("wall_time", kind="stable")
+                .drop_duplicates("epoch", keep="last")
+                .sort_values("epoch")
+            )
             if not np.isfinite(table["value"]).all():
                 raise ValueError(f"Non-finite TensorBoard values: {run_dir}: {tag}")
             curves[tag] = table
         print(f"TensorBoard seed {seed}: {run_dir}")
         return curves
-    raise FileNotFoundError(f"No TensorBoard run with both impedance RMSE tags in {seed_dir}")
+    raise FileNotFoundError(
+        f"No TensorBoard run with both impedance RMSE tags in {seed_dir}"
+    )
 
 
 def print_impedance_error_reduction(curves):
@@ -305,46 +355,92 @@ def print_impedance_error_reduction(curves):
         mask = checkpoint["learnable_line_mask"].bool()
         for component, symbol in (("reactance", "X"), ("resistance", "R")):
             actual, nominal, estimated = [
-                checkpoint[f"{prefix}_{component}_pu"][mask].detach().cpu().numpy().astype(float)
+                checkpoint[f"{prefix}_{component}_pu"][mask]
+                .detach()
+                .cpu()
+                .numpy()
+                .astype(float)
                 for prefix in ("actual_aged", "initial", "estimated")
             ]
-            if not actual.size or not all(np.isfinite(v).all() for v in (actual, nominal, estimated)):
-                raise ValueError(f"Invalid impedance values for seed {seed}: {component}")
+            if not actual.size or not all(
+                np.isfinite(v).all() for v in (actual, nominal, estimated)
+            ):
+                raise ValueError(
+                    f"Invalid impedance values for seed {seed}: {component}"
+                )
             baseline_error = nominal - actual
             final_error = estimated - actual
-            baseline_rmse = np.sqrt(np.mean(baseline_error ** 2))
-            final_rmse = np.sqrt(np.mean(final_error ** 2))
+            baseline_rmse = np.sqrt(np.mean(baseline_error**2))
+            final_rmse = np.sqrt(np.mean(final_error**2))
             last = series[f"epoch/{component}_mismatch_rmse"].iloc[-1]
             if int(last.epoch) != checkpoint["epochs"] or not np.isclose(
                 final_rmse, last.value, rtol=1e-5, atol=1e-9
             ):
-                raise ValueError(f"Checkpoint does not match the final TensorBoard epoch: {path}: {component}")
-            reduction = lambda before, after: 100 * (1 - after / before) if before > 0 else np.nan
-            absolute_rows.append({
-                "Seed": seed, "Parameter": symbol, "Epoch": int(last.epoch), "Lines": actual.size,
-                "Nominal RMSE (p.u.)": baseline_rmse, "Final RMSE (p.u.)": final_rmse,
-                "RMSE reduction (p.u.)": baseline_rmse - final_rmse,
-                "Reduction (%)": reduction(baseline_rmse, final_rmse),
-            })
+                raise ValueError(
+                    f"Checkpoint does not match the final TensorBoard epoch: {path}: {component}"
+                )
+            reduction = lambda before, after: (
+                100 * (1 - after / before) if before > 0 else np.nan
+            )
+            absolute_rows.append(
+                {
+                    "Seed": seed,
+                    "Parameter": symbol,
+                    "Epoch": int(last.epoch),
+                    "Lines": actual.size,
+                    "Nominal RMSE (p.u.)": baseline_rmse,
+                    "Final RMSE (p.u.)": final_rmse,
+                    "RMSE reduction (p.u.)": baseline_rmse - final_rmse,
+                    "Reduction (%)": reduction(baseline_rmse, final_rmse),
+                }
+            )
             # Normalize each line's signed error by its own real aged value.
             valid = np.abs(actual) > 1e-12
-            baseline_relative = (np.sqrt(np.mean((baseline_error[valid] / actual[valid]) ** 2))
-                                 if valid.any() else np.nan)
-            final_relative = (np.sqrt(np.mean((final_error[valid] / actual[valid]) ** 2))
-                              if valid.any() else np.nan)
-            relative_rows.append({
-                "Seed": seed, "Parameter": symbol, "Lines": int(valid.sum()),
-                "Nominal relative RMSE (%)": 100 * baseline_relative,
-                "Final relative RMSE (%)": 100 * final_relative,
-                "Relative RMSE reduction (%)": reduction(baseline_relative, final_relative),
-            })
-    print("\nImpedance errors against real aged values (eligible lines; final logged epoch):")
-    print(pd.DataFrame(absolute_rows).to_string(index=False, float_format=lambda v: f"{v:.6g}"))
-    print("\nPer-line relative error = (impedance - real aged impedance) / real aged impedance.")
+            baseline_relative = (
+                np.sqrt(np.mean((baseline_error[valid] / actual[valid]) ** 2))
+                if valid.any()
+                else np.nan
+            )
+            final_relative = (
+                np.sqrt(np.mean((final_error[valid] / actual[valid]) ** 2))
+                if valid.any()
+                else np.nan
+            )
+            relative_rows.append(
+                {
+                    "Seed": seed,
+                    "Parameter": symbol,
+                    "Lines": int(valid.sum()),
+                    "Nominal relative RMSE (%)": 100 * baseline_relative,
+                    "Final relative RMSE (%)": 100 * final_relative,
+                    "Relative RMSE reduction (%)": reduction(
+                        baseline_relative, final_relative
+                    ),
+                }
+            )
+    print(
+        "\nImpedance errors against real aged values (eligible lines; final logged epoch):"
+    )
+    print(
+        pd.DataFrame(absolute_rows).to_string(
+            index=False, float_format=lambda v: f"{v:.6g}"
+        )
+    )
+    print(
+        "\nPer-line relative error = (impedance - real aged impedance) / real aged impedance."
+    )
     print("Relative RMSE excludes real aged values with absolute magnitude <= 1e-12.")
-    print(pd.DataFrame(relative_rows).to_string(index=False, float_format=lambda v: f"{v:.6g}"))
-    print("Reduction (%) = 100 * (nominal error - final estimated error) / nominal error.")
-    print("Positive reduction indicates improvement; undefined zero-baseline reductions are NaN.")
+    print(
+        pd.DataFrame(relative_rows).to_string(
+            index=False, float_format=lambda v: f"{v:.6g}"
+        )
+    )
+    print(
+        "Reduction (%) = 100 * (nominal error - final estimated error) / nominal error."
+    )
+    print(
+        "Positive reduction indicates improvement; undefined zero-baseline reductions are NaN."
+    )
 
 
 def plot_tensorboard_impedance_rmse():
@@ -359,8 +455,13 @@ def plot_tensorboard_impedance_rmse():
     for ax, (tag, ylabel) in zip(axes, panels):
         for seed in seeds:
             table = curves[seed][tag]
-            ax.plot(table["epoch"], table["value"], color=f"C{seed}",
-                    linewidth=1.5, label=f"Seed {seed}")
+            ax.plot(
+                table["epoch"],
+                table["value"],
+                color=f"C{seed}",
+                linewidth=1.5,
+                label=f"Seed {seed}",
+            )
         ax.set_xlabel("Epoch")
         ax.set_ylabel(ylabel)
         ax.grid(alpha=0.2)
@@ -397,9 +498,17 @@ def plot_impedance_parity(results, component, symbol, zoom_max=None):
         lower, upper = lower - padding, upper + padding
 
     fig, ax = plt.subplots(figsize=(7, 7), constrained_layout=True)
-    ax.scatter(estimated, aged, s=22, color="tab:blue", alpha=0.8, label="Learnable lines")
-    ax.plot([lower, upper], [lower, upper], color="black", linestyle="--",
-            linewidth=1.2, label="Perfect estimate (y = x)")
+    ax.scatter(
+        estimated, aged, s=22, color="tab:blue", alpha=0.8, label="Learnable lines"
+    )
+    ax.plot(
+        [lower, upper],
+        [lower, upper],
+        color="black",
+        linestyle="--",
+        linewidth=1.2,
+        label="Perfect estimate (y = x)",
+    )
     ax.set_xlim(lower, upper)
     ax.set_ylim(lower, upper)
     ax.set_aspect("equal", adjustable="box")
@@ -416,7 +525,9 @@ def plot_impedance_parity(results, component, symbol, zoom_max=None):
         raise ValueError("zoom_max must be finite and positive")
     inset = ax.inset_axes([0.56, 0.10, 0.39, 0.39])
     inset.scatter(estimated, aged, s=15, color="tab:blue", alpha=0.8)
-    inset.plot([0, zoom_max], [0, zoom_max], color="black", linestyle="--", linewidth=1.0)
+    inset.plot(
+        [0, zoom_max], [0, zoom_max], color="black", linestyle="--", linewidth=1.0
+    )
     inset.set_xlim(0, zoom_max)
     inset.set_ylim(0, zoom_max)
     inset.set_aspect("equal", adjustable="box")
