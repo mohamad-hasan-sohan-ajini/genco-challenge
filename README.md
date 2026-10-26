@@ -117,23 +117,30 @@ distributions.
 From the repository root:
 
 ```bash
-venv/bin/python src/aged_impedance_estimation.py --seed 42
+venv/bin/python src/aged_impedance_estimation.py --case 57 --seed 0
 ```
 
 The standalone script runs Section 7's projected Adam experiment and its plots;
-it excludes Section 8. The seed is the only experiment argument (default: 42).
-It reads the original and aged datasets from
-`src/datakit_out/datakit_out_seed42/case118_original/` and
-`src/datakit_out/datakit_out_seed42/case118_aged_seed42_k2p5_scale40/`.
-Changing the seed updates both paths automatically.
+it excludes Section 8. `--case` accepts 14, 30, 57, or 118 (default: 118), and
+`--seed` selects the experiment seed (default: 42). The example reads from
+`src/datakit_out/case57/seed0/case57_original/` and
+`src/datakit_out/case57/seed0/case57_aged_seed0_k2p5_scale40/`.
+Changing the case or seed updates all paths automatically. Network generation
+must use the same seed for the original and aged datasets.
 
 Estimates, prediction tables, metrics, and title-free PDF plots at 300 DPI go to
-`src/results/local_predictions/seed42/`. TensorBoard events go to
-`src/tb/seed42/impedance-multiplier-denoising-TIMESTAMP/`. Paths are resolved
+`src/results/case57/seed0/`. TensorBoard events go to
+`src/tb/case57/seed0/impedance-multiplier-denoising-TIMESTAMP/`. Paths are resolved
 relative to the script, so it can also be launched from another working directory.
 The script retains the notebook's 250 epochs, learning rate, multiplier bounds,
 and in-service/non-transformer learnability mask. Estimation scenarios are also
 used for the final PF comparison; those plots are not held-out evaluation.
+
+IEEE-118 retains `gridfm/genco-pf-transfer/finetune/case118_250000`. IEEE-14/30/57
+load matching config/checkpoint/normalizer bundles from `gridfm/genco-pf-datakit`,
+using the Base model with training seed 0 independently of the experiment seed.
+Older configs are converted in memory for the installed Graphkit version.
+Existing IEEE-118 outputs in the old seed-only directories are not moved.
 
 ## 6. Replot saved results for the paper
 

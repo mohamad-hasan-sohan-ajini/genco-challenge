@@ -1,12 +1,16 @@
 """Standalone Section 7 of 1_error_dist.ipynb (projected Adam only).
 
 Run from any directory:
-    /path/to/venv/bin/python /path/to/src/aged_impedance_estimation.py --seed 42
+    /path/to/venv/bin/python /path/to/src/aged_impedance_estimation.py --case 57 --seed 0
 
-Inputs: src/datakit_out/datakit_out_seedXX/{case118_original,
-        case118_aged_seedXX_k2p5_scale40}/raw/
-Outputs: src/results/local_predictions/seedXX/
-TensorBoard: src/tb/seedXX/impedance-multiplier-denoising-TIMESTAMP/
+Inputs: src/datakit_out/caseN/seedXX/{caseN_original,
+        caseN_aged_seedXX_k2p5_scale40}/raw/
+Outputs: src/results/caseN/seedXX/
+TensorBoard: src/tb/caseN/seedXX/impedance-multiplier-denoising-TIMESTAMP/
+
+IEEE-118 retains the transfer checkpoint used in the notebook. IEEE-14/30/57
+use their matching Datakit Base checkpoint (model-training seed 0). The CLI
+seed selects experimental data, independently of the pretrained model's seed.
 
 GENCO is frozen. Independent R/X multipliers use the notebook's [1, 1.5]
 bounds and one full-dataset Adam update per epoch. Aged admittances and
@@ -59,6 +63,7 @@ from gridfm_graphkit.io.param_handler import (
     load_model,
     load_normalizer,
 )
+from gridfm_graphkit.io.config_version import resolve_config
 
 
 from torch.nn import functional as F
@@ -77,22 +82,79 @@ MULTIPLIER_MAX = 1.5
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def experiment_paths(seed):
+def experiment_paths(seed, case=118):
     """Resolve the current Datakit directory layout for one experiment."""
-    root = PROJECT_DIR / "datakit_out" / f"datakit_out_seed{seed}"
+    root = PROJECT_DIR / "datakit_out" / f"case{case}" / f"seed{seed}"
     datasets = {
-        "case118_original": root / "case118_original",
-        "case118_aged": root / f"case118_aged_seed{seed}_k2p5_scale40",
+        f"case{case}_original": root / f"case{case}_original",
+        f"case{case}_aged": root / f"case{case}_aged_seed{seed}_k2p5_scale40",
     }
     return (
         datasets,
-        PROJECT_DIR / "results" / "local_predictions" / f"seed{seed}",
-        PROJECT_DIR / "tb" / f"seed{seed}",
+        PROJECT_DIR / "results" / f"case{case}" / f"seed{seed}",
+        PROJECT_DIR / "tb" / f"case{case}" / f"seed{seed}",
     )
+
+
+def model_artifact_spec(case):
+    """Select one matched PF checkpoint/config/normalizer bundle per case."""
+    if case == 118:
+        return {
+            "repo_id": MODEL_REPO_ID,
+            "run_dir": str(RUN_DIR),
+            "config_filename": "case118_250000.yaml",
+            "normalizer_network": NORMALIZER_NETWORK,
+        }
+    if case not in (14, 30, 57):
+        raise ValueError(f"Unsupported IEEE case: {case}")
+    return {
+        "repo_id": "gridfm/genco-pf-datakit",
+        "run_dir": f"case{case}_ieee/base/seed0",
+        "config_filename": f"case{case}_ieee_base_seed0.yaml",
+        "normalizer_network": f"case{case}_ieee",
+    }
+
+
+def load_model_bundle(case):
+    """Load compatible GENCO artifacts, migrating older YAML schemas in memory."""
+    spec = model_artifact_spec(case)
+    paths = {
+        key: hf_hub_download(
+            spec["repo_id"], f"{spec['run_dir']}/{filename}", revision=MODEL_REVISION
+        )
+        for key, filename in {
+            "checkpoint": "best_model_state_dict.pt",
+            "config": spec["config_filename"],
+            "normalizer": "normalizer_stats.pt",
+        }.items()
+    }
+    with open(paths["config"], encoding="utf-8") as handle:
+        config = resolve_config(
+            yaml.safe_load(handle), paths["config"], conversion_mode="auto_inline"
+        )
+    args = NestedNamespace(**config)
+    saved_stats = torch.load(paths["normalizer"], map_location="cpu", weights_only=True)
+    network = spec["normalizer_network"]
+    if network not in saved_stats:
+        raise ValueError(f"Normalizer does not contain the selected network: {network}")
+    normalizer = load_normalizer(args)
+    normalizer.fit_from_dict(saved_stats[network])
+    model = load_model(args)
+    state = torch.load(paths["checkpoint"], map_location="cpu", weights_only=True)
+    state = _normalize_loaded_state_dict_keys(state)
+    model.load_state_dict(
+        {key.removeprefix("model."): value for key, value in state.items()}, strict=True
+    )
+    model.to(DEVICE).eval()
+    return model, normalizer, args, paths
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--case", type=int, choices=(14, 30, 57, 118), default=118,
+        help="IEEE bus system (default: 118)",
+    )
     parser.add_argument(
         "--seed",
         type=int,
@@ -100,18 +162,21 @@ def parse_args(argv=None):
         help="Experiment and dataset seed (default: 42)",
     )
     options = parser.parse_args(argv)
+    if not 0 <= options.seed < 2**32:
+        parser.error("--seed must be between 0 and 2**32 - 1")
     return options
 
 
 def main(argv=None):
     options = parse_args(argv)
+    CASE = options.case
     SEED = options.seed
-    DATASET_ROOTS, OUTPUT_DIR, tb_root = experiment_paths(SEED)
+    DATASET_ROOTS, OUTPUT_DIR, tb_root = experiment_paths(SEED, CASE)
     for name, root in DATASET_ROOTS.items():
         for table in ("bus_data.parquet", "gen_data.parquet", "branch_data.parquet"):
             if not (root / "raw" / table).exists():
                 raise FileNotFoundError(f"{name}: missing {root / 'raw' / table}")
-    original_case_path = PROJECT_DIR / "grids" / "case118_original.m"
+    original_case_path = PROJECT_DIR / "grids" / f"case{CASE}_original.m"
     if not original_case_path.is_file():
         raise FileNotFoundError(original_case_path)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -125,14 +190,16 @@ def main(argv=None):
     torch.manual_seed(SEED)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(SEED)
-    print(f"Seed: {SEED}; device: {DEVICE}")
+    print(f"IEEE-{CASE}; seed: {SEED}; device: {DEVICE}")
     print(f"Datasets: {DATASET_ROOTS}")
     print(f"Results: {OUTPUT_DIR}")
     print(f"TensorBoard: {TB_DIR}")
     (OUTPUT_DIR / "experiment_config.json").write_text(
         json.dumps(
             {
+                "case": CASE,
                 "seed": SEED,
+                "model_artifacts": model_artifact_spec(CASE),
                 "dataset_roots": {k: str(v) for k, v in DATASET_ROOTS.items()},
                 "epochs": EPOCHS,
                 "learning_rate": LR,
@@ -146,29 +213,8 @@ def main(argv=None):
         + "\n"
     )
 
-    artifact_paths = {
-        key: hf_hub_download(
-            MODEL_REPO_ID,
-            f"{RUN_DIR}/{filename}",
-            revision=MODEL_REVISION,
-        )
-        for key, filename in {
-            "checkpoint": "best_model_state_dict.pt",
-            "config": "case118_250000.yaml",
-            "normalizer": "normalizer_stats.pt",
-        }.items()
-    }
+    model, normalizer, args, artifact_paths = load_model_bundle(CASE)
     print(f"{artifact_paths = }")
-    with open(artifact_paths["config"], encoding="utf-8") as handle:
-        args = NestedNamespace(**yaml.safe_load(handle))
-
-    saved_stats = torch.load(
-        artifact_paths["normalizer"],
-        map_location="cpu",
-        weights_only=True,
-    )
-    normalizer = load_normalizer(args)
-    normalizer.fit_from_dict(saved_stats[NORMALIZER_NETWORK])
 
     required_tables = ["bus_data.parquet", "gen_data.parquet", "branch_data.parquet"]
     for dataset_name, root in DATASET_ROOTS.items():
@@ -188,18 +234,6 @@ def main(argv=None):
         for dataset_name, root in DATASET_ROOTS.items()
     }
 
-    model = load_model(args)
-    state = torch.load(
-        artifact_paths["checkpoint"],
-        map_location="cpu",
-        weights_only=True,
-    )
-    state = _normalize_loaded_state_dict_keys(state)
-    model.load_state_dict(
-        {key.removeprefix("model."): value for key, value in state.items()},
-        strict=True,
-    )
-    model.to(DEVICE).eval()
     for dataset_name, dataset in datasets.items():
         print(
             f"Loaded {len(dataset):,} scenarios from {DATASET_ROOTS[dataset_name] / 'raw'}"
@@ -236,13 +270,18 @@ def main(argv=None):
                 batch = Batch.from_data_list(graphs).to(DEVICE)
                 output = model(batch)
                 pred = output["bus"]
-                if pred.size(1) <= max(VM_OUT, VA_OUT, PG_OUT, QG_OUT):
+                if pred.size(1) <= max(VM_OUT, VA_OUT):
                     raise ValueError(
-                        "Model bus output does not contain Vm, Va, Pg and Qg"
+                        "Model bus output does not contain Vm and Va"
                     )
 
                 # Graphkit keeps Va in radians during inverse_transform.
-                normalizer.inverse_output(output, batch)
+                # Datakit PF heads emit Vm/Va only (already in physical units).
+                # The IEEE-118 transfer head additionally emits powers, whose
+                # inverse scaling requires all four bus-output columns.
+                has_power_outputs = pred.size(1) > max(PG_OUT, QG_OUT)
+                if has_power_outputs:
+                    normalizer.inverse_output(output, batch)
                 normalizer.inverse_transform(batch)
                 bus_y = batch["bus"].y
                 gen_y = batch["gen"].y
@@ -286,9 +325,11 @@ def main(argv=None):
                                 .cpu()
                                 .numpy(),
                                 "pg_gt_mw": pg_target[a:b].cpu().numpy(),
-                                "pg_pred_mw": pred[a:b, PG_OUT].cpu().numpy(),
+                                "pg_pred_mw": (pred[a:b, PG_OUT].cpu().numpy()
+                                               if has_power_outputs else np.full(b - a, np.nan)),
                                 "qg_gt_mvar": bus_y[a:b, QG_H].cpu().numpy(),
-                                "qg_pred_mvar": pred[a:b, QG_OUT].cpu().numpy(),
+                                "qg_pred_mvar": (pred[a:b, QG_OUT].cpu().numpy()
+                                                 if has_power_outputs else np.full(b - a, np.nan)),
                             }
                         )
                     )
@@ -360,9 +401,9 @@ def main(argv=None):
         ("prediction", "Prediction error"),
     )
 
-    ORIGINAL_NAME = "case118_original"
-    AGED_NAME = "case118_aged"
-    HIDDEN_AGING_NAME = "case118_aged_original_impedance"
+    ORIGINAL_NAME = f"case{CASE}_original"
+    AGED_NAME = f"case{CASE}_aged"
+    HIDDEN_AGING_NAME = f"case{CASE}_aged_original_impedance"
     original_dataset = datasets[ORIGINAL_NAME]
     aged_dataset = datasets[AGED_NAME]
     edge_type = ("bus", "connects", "bus")
@@ -498,7 +539,7 @@ def main(argv=None):
         variance = (total_squared / active_count[:, None] - mean.square()).clamp_min(0)
         return mean.float(), variance.sqrt().float()
 
-    # Average only active observations. shape: 372 x 4 (Yff_r, Yff_i, Yft_r, Yft_i)
+    # Average active observations: [2 * n_lines, 4] (Yff_r, Yff_i, Yft_r, Yft_i).
     initial_admittance, original_admittance_std = mean_admittance(
         original_dataset,
         original_training_indices,
@@ -513,7 +554,7 @@ def main(argv=None):
     # Datakit normalizes Y by baseMVA_orig/baseMVA. For an ordinary line,
     # Ytf = Yft = -1/(R+jX), so R+jX = scale/(-Yft_normalized).
     admittance_scale = float(normalizer.baseMVA_orig / normalizer.baseMVA)
-    # initial_[self|cross]_[forward|reverse] shape: 186 x 1 (complex)
+    # initial_[self|cross]_[forward|reverse] are complex vectors of length n_lines.
     initial_self_forward = torch.complex(
         initial_admittance[:n_lines, 0],
         initial_admittance[:n_lines, 1],
@@ -537,7 +578,7 @@ def main(argv=None):
 
     # Read the original MATPOWER branch metadata to identify learnable lines:
     # Estimate R/X for in-service branches without non-unity taps or phase shifts.
-    original_case_path = PROJECT_DIR / "grids" / "case118_original.m"
+    original_case_path = PROJECT_DIR / "grids" / f"case{CASE}_original.m"
     original_case_text = original_case_path.read_text()
     branch_match = re.search(
         r"mpc\.branch\s*=\s*\[(.*?)\];",
@@ -811,7 +852,9 @@ def main(argv=None):
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
+            "case": CASE,
             "seed": SEED,
+            "model_artifacts": model_artifact_spec(CASE),
             "dataset_roots": {key: str(path) for key, path in DATASET_ROOTS.items()},
             "edge_index": reference_edge_index,
             "learnable_line_mask": learnable_line_mask,
@@ -1264,7 +1307,7 @@ def main(argv=None):
                     alpha=0.4,
                     linewidth=0.8,
                 )
-            # Highlight the user's example without a 186-entry legend.
+            # Highlight branch 1 without a legend entry for every branch.
             ax.stairs(
                 histogram_fractions(endpoint_errors[(endpoint, 0)], bins),
                 bins,
@@ -1292,7 +1335,7 @@ def main(argv=None):
     print(f"Saved branch endpoint histograms to {branch_pf_path}")
     print("Black curve: branch 1. Shared buses produce overlapping curves.")
     plt.close(fig)
-    print(f"Completed seed {SEED}. Results: {OUTPUT_DIR}")
+    print(f"Completed IEEE-{CASE}, seed {SEED}. Results: {OUTPUT_DIR}")
 
 
 if __name__ == "__main__":
