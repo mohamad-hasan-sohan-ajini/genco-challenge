@@ -120,3 +120,17 @@ relative to the script, so it can also be launched from another working director
 The script retains the notebook's 250 epochs, learning rate, multiplier bounds,
 and in-service/non-transformer learnability mask. Estimation scenarios are also
 used for the final PF comparison; those plots are not held-out evaluation.
+
+## 6. Replot saved results for the paper
+
+```bash
+venv/bin/python src/paper_plots.py --seed 42
+```
+
+This loads the saved estimator and prediction tables from
+`src/results/local_predictions/seed42/`, without retraining or rerunning inference.
+The first plotting method makes a two-panel Vm/Va error histogram with nominal
+impedance in red, aged impedance in green, and estimated impedance in blue.
+Both panels have legends. It saves
+`estimated_impedance_pf_error_histograms_replot.pdf` beside the original plot,
+at 300 DPI with no titles. Add further plotting-method calls in `main()`.
