@@ -230,6 +230,24 @@ def plot_nominal_vs_aged_pf_error_histograms(results):
         "Nominal impedance and PF": (load_nominal_pf_predictions(results), "tab:blue"),
         "Aged impedance and PF": (results.predictions["Aged impedance"], "tab:orange"),
     }
+    return _plot_pf_error_comparison(
+        results, cases, "nominal_vs_aged_pf_error_histograms_replot.pdf"
+    )
+
+
+def plot_hidden_aging_error_histograms(results):
+    """Notebook's second plot: aged PF with nominal versus aged impedance."""
+    cases = {
+        "Aged PF — nominal impedance": (results.predictions["Nominal impedance"], "tab:blue"),
+        "Aged PF — aged impedance": (results.predictions["Aged impedance"], "tab:orange"),
+    }
+    return _plot_pf_error_comparison(
+        results, cases, "hidden_aging_error_histograms_replot.pdf"
+    )
+
+
+def _plot_pf_error_comparison(results, cases, filename):
+    """Shared two-panel physical-unit errors, with one legend per panel."""
     fig, axes = plt.subplots(1, 2, figsize=(12, 4), constrained_layout=True)
     for ax, (variable, (gt, prediction, unit)) in zip(axes, VOLTAGE_COLUMNS.items()):
         errors = {}
@@ -249,7 +267,7 @@ def plot_nominal_vs_aged_pf_error_histograms(results):
         ax.set_ylabel("Fraction of observations")
         ax.grid(alpha=0.2)
         ax.legend()
-    output_path = results.directory / "nominal_vs_aged_pf_error_histograms_replot.pdf"
+    output_path = results.directory / filename
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     print(f"Saved {output_path}")
     return fig
@@ -263,6 +281,8 @@ def main(argv=None):
     figure = plot_estimated_impedance_pf_error_histograms(results)
     plt.close(figure)
     figure = plot_nominal_vs_aged_pf_error_histograms(results)
+    plt.close(figure)
+    figure = plot_hidden_aging_error_histograms(results)
     plt.close(figure)
 
 
