@@ -37,7 +37,7 @@ admittance_perturbation:
 
 settings:
   num_processes: 8 # Number of parallel processes to use
-  data_dir: "./datakit_out/case118/seed4" # Network-specific folder; keep seed directory in sync with settings.seed
+  data_dir: "./datakit_out/case118/seed0" # Network-specific folder; keep seed directory in sync with settings.seed
   large_chunk_size: 250 # Number of load scenarios processed before saving
   overwrite: true # If true, overwrites existing files, if false, appends to files
   mode: "pf" # Mode of the script; options: pf, opf. pf: power flow data where one or more operating limits – the inequality constraints defined in OPF, e.g., voltage magnitude or branch limits – may be violated. opf:  generates datapoints for training OPF solvers, with cost-optimal dispatches that satisfy all operating limits (OPF-feasible)
@@ -48,4 +48,4 @@ settings:
   pf_solver: "powermodel" # Engine solving the power flow in pf mode; options: powermodel, powsybl, lightsim2grid. The OPF is always solved by PowerModels. powsybl requires network.reader: powsybl.
   opf_formulation: "polar" # Use "rectangular" for the faster ACR formulation. AC OPF is nonconvex, so validate that its potentially different local solution is acceptable before switching.
   max_iter: 200 # Max iterations for Ipopt-based solvers
-  seed: 4 # Seed for random number generation. If null, a random seed is generated (RECOMMENDED). To get the same data across runs, set the seed and note that ALL OTHER PARAMETERS IN THE CONFIG FILE MUST BE THE SAME.
+  seed: 0 # Seed for random number generation. If null, a random seed is generated (RECOMMENDED). To get the same data across runs, set the seed and note that ALL OTHER PARAMETERS IN THE CONFIG FILE MUST BE THE SAME.
