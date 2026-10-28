@@ -385,9 +385,9 @@ def _plot_error_tables(
 ):
     figure, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
     colors = {
-        "Nominal impedance + nominal PF": "tab:orange",
-        "Aged impedance + aged PF": "green",
-        "Hugging Face nominal impedance + nominal PF": "tab:blue",
+        "Nominal (local)": "tab:orange",
+        "Aged (local)": "green",
+        "HF": "tab:blue",
     }
     statistics = []
     variables = (("Vm", "p.u."), ("Va", "degrees"), ("P", "MW"), ("Q", "MVAr"))
@@ -504,12 +504,12 @@ if __name__ == "__main__":
     datasets = {
         57: [
             (
-                "Nominal impedance + nominal PF",
+                "Nominal (local)",
                 PROJECT_DIR / "datakit_out" / "case57" / "seed0" / "case57_original",
                 1_000,
             ),
             (
-                "Aged impedance + aged PF",
+                "Aged (local)",
                 PROJECT_DIR
                 / "datakit_out"
                 / "case57"
@@ -518,7 +518,7 @@ if __name__ == "__main__":
                 1_000,
             ),
             (
-                "Hugging Face nominal impedance + nominal PF",
+                "HF",
                 HuggingFaceData(
                     "gridfm/pf_small_case57_ieee",
                     scenario_partitions=tuple(range(5)),
@@ -528,7 +528,7 @@ if __name__ == "__main__":
         ],
         118: [
             (
-                "Nominal impedance + nominal PF",
+                "Nominal (local)",
                 PROJECT_DIR
                 / "datakit_out"
                 / "case118"
@@ -537,7 +537,7 @@ if __name__ == "__main__":
                 1_000,
             ),
             (
-                "Aged impedance + aged PF",
+                "Aged (local)",
                 PROJECT_DIR
                 / "datakit_out"
                 / "case118"
@@ -546,7 +546,7 @@ if __name__ == "__main__":
                 1_000,
             ),
             (
-                "Hugging Face nominal impedance + nominal PF",
+                "HF",
                 HuggingFaceData(
                     "gridfm/pf_small_case118_ieee",
                     scenario_partitions=tuple(range(5)),
