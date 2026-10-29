@@ -13,6 +13,7 @@ import json
 import math
 import random
 import re
+from decimal import Decimal
 from pathlib import Path
 
 from gridfm_datakit.network import get_pglib_source_path
@@ -83,7 +84,7 @@ def parse_args():
     parser.add_argument(
         "--output",
         type=Path,
-        help="Base output filename (default: grids/case<case>_aged.m); seed, shape and scale are appended",
+        help="Base output filename (default: grids/case<case>_aged.m); seed, k, s, degradation percent d, maximum age a and exponent g are appended",
     )
     args = parser.parse_args()
     if args.output is None:
@@ -117,20 +118,33 @@ def sample_truncated_weibull(rng, shape, scale, max_age):
     return scale * (-math.log1p(-probability)) ** (1.0 / shape)
 
 
-def parameterized_output_path(output, seed, shape, scale):
-    """Append sampling settings using characters valid in MATPOWER names."""
+def parameterized_output_path(
+    output, seed, shape, scale, max_degradation=0.5, max_age=60.0,
+    degradation_exponent=2.0,
+):
+    """Append seed/k/s/d/a/g tags; d is a percentage, s and a are years.
+
+    Encode decimals as ``p`` to keep the MATPOWER function name valid.
+    Include every age/degradation parameter so changing the degradation cap,
+    truncation age or exponent creates a distinct file and corrected-file cache.
+    """
 
     def tag(value):
+        value = format(Decimal(str(value)), "f")
+        if "." in value:
+            value = value.rstrip("0").rstrip(".")
         return (
-            str(value)
-            .removesuffix(".0")
+            value
             .replace(".", "p")
             .replace("-", "m")
             .replace("+", "")
         )
 
+    degradation_percent = format(Decimal(str(max_degradation)) * 100, "f")
     return output.with_name(
-        f"{output.stem}_seed{tag(seed)}_k{tag(shape)}_scale{tag(scale)}{output.suffix}"
+        f"{output.stem}_seed{tag(seed)}_k{tag(shape)}_s{tag(scale)}"
+        f"_d{tag(degradation_percent)}_a{tag(max_age)}"
+        f"_g{tag(degradation_exponent)}{output.suffix}"
     )
 
 
@@ -204,7 +218,8 @@ def main():
     original_network_name = f"case{args.case}_original"
     source_network_name = f"case{args.case}_ieee"
     output_path = parameterized_output_path(
-        args.output, args.seed, args.weibull_shape, args.weibull_scale
+        args.output, args.seed, args.weibull_shape, args.weibull_scale,
+        args.max_degradation, args.max_age, args.degradation_exponent,
     )
 
     source = Path(get_pglib_source_path(source_network_name))
