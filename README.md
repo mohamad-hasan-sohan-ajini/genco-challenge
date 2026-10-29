@@ -59,19 +59,27 @@ All five parameters shown above are configurable; the seed makes the sampled age
 reproducible. Transformer branches, out-of-service branches, and generator data
 remain unchanged. The command creates:
 
-- `grids/case118_aged_seed0_k2p5_scale40.m`: the aged network;
-- `grids/case118_aged_seed0_k2p5_scale40.json`: distribution settings, sampled ages, degradations,
+- `grids/case118_aged_seed0_k2p5_s40_d50_a60_g2.m`: the aged network;
+- `grids/case118_aged_seed0_k2p5_s40_d50_a60_g2.json`: distribution settings, sampled ages, degradations,
   and each eligible line's original and aged values;
-- `grids/case118_aged_seed0_k2p5_scale40_age_distribution.png`: a histogram of the
+- `grids/case118_aged_seed0_k2p5_s40_d50_a60_g2_age_distribution.png`: a histogram of the
   sampled ages of eligible bus-to-bus lines;
-- `grids/case118_aged_seed0_k2p5_scale40_weibull_distribution.pdf`: the theoretical
+- `grids/case118_aged_seed0_k2p5_s40_d50_a60_g2_weibull_distribution.pdf`: the theoretical
   right-truncated Weibull age probability density, normalized over 0–60 years;
 - `grids/case118_original.m`: the unmodified source network.
 
-The script appends the seed, Weibull shape (`k`) and scale to the base output
-filename. Decimal points become `p` so the matching MATPOWER function name is
-valid. Set `network.name` in the aged YAML configuration to the generated stem,
-for example `case118_aged_seed0_k2p5_scale40`.
+The script appends compact parameter tags: `seed` for the random seed, `k` for
+Weibull shape, `s` for scale in years, `d` for maximum degradation in percent,
+`a` for maximum age in years, and `g` for the degradation exponent. For example,
+`--max-degradation 0.05` gives `d5`, while `0.5` gives `d50`. Decimal points become
+`p` so the matching MATPOWER function name is valid. Set `network.name` in the
+aged YAML configuration to the generated stem, for example
+`case118_aged_seed0_k2p5_s40_d50_a60_g2`.
+
+Existing network files and dataset paths are not renamed automatically. When using
+a new filename, update the aged YAML's `network.name` and the aged dataset path in
+the evaluation/estimation scripts. Different degradation parameters now produce
+different names, which also separates Datakit's `_corrected.m` caches.
 
 Select another IEEE system with `--case` (14, 30, 57, or 118; default: 118).
 For example, from `src`:
@@ -81,7 +89,7 @@ For example, from `src`:
 ```
 
 This selects `case57_ieee` and writes `grids/case57_original.m`,
-`grids/case57_aged_seed0_k2p5_scale40.m`, its JSON report, and its age histogram.
+`grids/case57_aged_seed0_k2p5_s40_d50_a60_g2.m`, its JSON report, and its age histogram.
 Without `--output`, the base filename is `grids/case<case>_aged.m`.
 An explicit `--output` still overrides that base path.
 
@@ -99,7 +107,7 @@ Dataset size, random seed, perturbations, solver settings, and output directorie
 controlled by the corresponding YAML files. For the seed-0 examples, set
 `settings.seed: 0` and `settings.data_dir: "./datakit_out/case118/seed0"` in both
 IEEE-118 configs, and set the aged `network.name` to
-`case118_aged_seed0_k2p5_scale40`. For IEEE-57, use the `case57` configs and
+`case118_aged_seed0_k2p5_s40_d50_a60_g2`. For IEEE-57, use the `case57` configs and
 `./datakit_out/case57/seed0`. Datakit adds the network name and `raw` to
 `settings.data_dir`. When changing the seed, update the directory and aged
 network filename as well; YAML paths are literal, not templates.

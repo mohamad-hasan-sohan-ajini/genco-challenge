@@ -26,7 +26,7 @@ topology_perturbation:
   # outage_count_probabilities: [0.1, 0.9]
 
 generation_perturbation:
-  type: "cost_permutation" # Type of generation perturbation; options: cost_permutation, cost_perturbation, none
+  type: "none" # Type of generation perturbation; options: cost_permutation, cost_perturbation, none
   # WARNING: the following parameter is only used if type is "cost_permutation"
   sigma: 1.0 # Size of range used for sampling scaling factor
 
