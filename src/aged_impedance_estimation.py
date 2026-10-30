@@ -165,8 +165,6 @@ def parse_args(argv=None):
         help="Experiment and dataset seed (default: 0)",
     )
     options = parser.parse_args(argv)
-    if not 0 <= options.seed < 2**32:
-        parser.error("--seed must be between 0 and 2**32 - 1")
     return options
 
 
