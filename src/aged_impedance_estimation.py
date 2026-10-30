@@ -96,6 +96,27 @@ def experiment_paths(seed, case=118):
     )
 
 
+def read_matpower_branch_rows(case_path):
+    """Read numeric rows from a MATPOWER ``mpc.branch`` table."""
+    case_text = case_path.read_text()
+    branch_match = re.search(
+        r"mpc\.branch\s*=\s*\[(.*?)\];",
+        case_text,
+        re.DOTALL,
+    )
+    if branch_match is None:
+        raise ValueError(f"Missing mpc.branch table in {case_path}")
+
+    branch_rows = []
+    for line in branch_match.group(1).splitlines():
+        fields = line.partition("%")[0].strip().rstrip(";").split()
+        if fields:
+            if len(fields) < 13:
+                raise ValueError(f"Invalid mpc.branch row in {case_path}: {line}")
+            branch_rows.append([float(field) for field in fields])
+    return branch_rows
+
+
 def model_artifact_spec(case):
     """Select one matched PF checkpoint/config/normalizer bundle per case."""
     if case == 118:
@@ -500,11 +521,8 @@ def main(argv=None):
         )
 
     training_indices = available_dataset_indices(aged_dataset)
-    original_training_indices = available_dataset_indices(original_dataset)
     if not training_indices:
         raise RuntimeError("The aged dataset contains no scenarios")
-    if not original_training_indices:
-        raise RuntimeError("The original dataset contains no scenarios")
 
     # Every untransformed scenario has the same complete directed-edge ordering. The
     # first half stores from->to edges and the second half their to->from counterparts.
@@ -544,71 +562,91 @@ def main(argv=None):
         variance = (total_squared / active_count[:, None] - mean.square()).clamp_min(0)
         return mean.float(), variance.sqrt().float()
 
-    # Average active observations: [2 * n_lines, 4] (Yff_r, Yff_i, Yft_r, Yft_i).
-    initial_admittance, original_admittance_std = mean_admittance(
-        original_dataset,
-        original_training_indices,
-        "Averaging original Y",
-    )
+    # Average active aged observations for ground-truth diagnostics only:
+    # [2 * n_lines, 4] (Yff_r, Yff_i, Yft_r, Yft_i).
     actual_aged_admittance, aged_admittance_std = mean_admittance(
         aged_dataset,
         training_indices,
         "Averaging aged Y (diagnostic only)",
     )
 
-    # Datakit normalizes Y by baseMVA_orig/baseMVA. For an ordinary line,
-    # Ytf = Yft = -1/(R+jX), so R+jX = scale/(-Yft_normalized).
-    admittance_scale = float(normalizer.baseMVA_orig / normalizer.baseMVA)
-    # initial_[self|cross]_[forward|reverse] are complex vectors of length n_lines.
-    initial_self_forward = torch.complex(
-        initial_admittance[:n_lines, 0],
-        initial_admittance[:n_lines, 1],
-    )
-    initial_cross_forward = torch.complex(
-        initial_admittance[:n_lines, 2],
-        initial_admittance[:n_lines, 3],
-    )
-    initial_self_reverse = torch.complex(
-        initial_admittance[n_lines:, 0],
-        initial_admittance[n_lines:, 1],
-    )
-    initial_cross_reverse = torch.complex(
-        initial_admittance[n_lines:, 2],
-        initial_admittance[n_lines:, 3],
-    )
-    initial_series_y = -initial_cross_forward
-    initial_impedance = admittance_scale / initial_series_y
-    forward_shunt = initial_self_forward - initial_series_y
-    reverse_shunt = initial_self_reverse - initial_series_y
-
-    # Read the original MATPOWER branch metadata to identify learnable lines:
-    # Estimate R/X for in-service branches without non-unity taps or phase shifts.
-    original_case_path = PROJECT_DIR / "grids" / f"case{CASE}_original.m"
-    original_case_text = original_case_path.read_text()
-    branch_match = re.search(
-        r"mpc\.branch\s*=\s*\[(.*?)\];",
-        original_case_text,
-        re.DOTALL,
-    )
-
-    # Mark the branch as learnable only if it is in service and is not represented as a transformer.
-    if branch_match is None:
-        raise ValueError(f"Missing mpc.branch table in {original_case_path}")
-    branch_fields = []
-    for line in branch_match.group(1).splitlines():
-        fields = line.partition("%")[0].strip().rstrip(";").split()
-        if fields:
-            branch_fields.append(fields)
-    if len(branch_fields) != n_lines:
+    # Read nominal branch parameters directly from the corresponding MATPOWER case.
+    branch_rows = read_matpower_branch_rows(original_case_path)
+    if len(branch_rows) != n_lines:
         raise ValueError("MATPOWER branch count differs from the graph")
+
+    initial_resistance = torch.tensor(
+        [row[2] for row in branch_rows], dtype=torch.float32
+    )
+    initial_reactance = torch.tensor(
+        [row[3] for row in branch_rows], dtype=torch.float32
+    )
+    initial_impedance = torch.complex(initial_resistance, initial_reactance)
+    if (initial_impedance.abs() == 0).any():
+        raise ValueError(f"Zero branch impedance in {original_case_path}")
+
+    # Datakit normalizes Y by baseMVA_orig/baseMVA. Recreate its directed-edge
+    # admittance features from MATPOWER's R, X, B, tap, shift, and status fields.
+    admittance_scale = float(normalizer.baseMVA_orig / normalizer.baseMVA)
+    branch_charging = torch.tensor(
+        [row[4] for row in branch_rows], dtype=torch.float32
+    )
+    tap_magnitude = torch.tensor(
+        [row[8] if row[8] != 0.0 else 1.0 for row in branch_rows],
+        dtype=torch.float32,
+    )
+    tap_shift = torch.deg2rad(
+        torch.tensor([row[9] for row in branch_rows], dtype=torch.float32)
+    )
+    branch_status = torch.tensor(
+        [row[10] > 0.0 for row in branch_rows], dtype=torch.float32
+    )
+    tap = torch.polar(tap_magnitude, tap_shift)
+    series_y = branch_status * admittance_scale / initial_impedance
+    half_charging_y = torch.complex(
+        torch.zeros_like(branch_charging),
+        branch_status * admittance_scale * branch_charging / 2.0,
+    )
+    self_y = series_y + half_charging_y
+    self_forward = self_y / tap.abs().square()
+    cross_forward = -series_y / tap.conj()
+    self_reverse = self_y
+    cross_reverse = -series_y / tap
+    initial_admittance = torch.cat(
+        [
+            torch.stack(
+                [
+                    self_forward.real,
+                    self_forward.imag,
+                    cross_forward.real,
+                    cross_forward.imag,
+                ],
+                dim=1,
+            ),
+            torch.stack(
+                [
+                    self_reverse.real,
+                    self_reverse.imag,
+                    cross_reverse.real,
+                    cross_reverse.imag,
+                ],
+                dim=1,
+            ),
+        ]
+    )
+
+    forward_shunt = self_forward - series_y
+    reverse_shunt = self_reverse - series_y
+
+    # Estimate R/X only for in-service branches without non-unity taps or shifts.
     learnable_line_mask = torch.tensor(
         [
-            float(fields[10]) > 0
+            row[10] > 0
             and not (
-                (float(fields[8]) != 0.0 and float(fields[8]) != 1.0)
-                or float(fields[9]) != 0.0
+                (row[8] != 0.0 and row[8] != 1.0)
+                or row[9] != 0.0
             )
-            for fields in branch_fields
+            for row in branch_rows
         ],
         dtype=torch.bool,
     )
@@ -617,8 +655,6 @@ def main(argv=None):
 
     if not learnable_line_mask.any():
         raise RuntimeError("No eligible transmission lines are available")
-    initial_resistance = initial_impedance.real.float()
-    initial_reactance = initial_impedance.imag.float()
     resistance_multiplier = torch.nn.Parameter(torch.ones_like(initial_resistance))
     reactance_multiplier = torch.nn.Parameter(torch.ones_like(initial_reactance))
     multiplier_parameters = [resistance_multiplier, reactance_multiplier]
@@ -874,7 +910,6 @@ def main(argv=None):
             "estimated_admittance_normalized": final_admittance,
             "initial_admittance_normalized": initial_admittance,
             "actual_aged_admittance_normalized": actual_aged_admittance,
-            "original_scenario_std": original_admittance_std,
             "aged_scenario_std": aged_admittance_std,
             "training_indices": torch.as_tensor(training_indices),
             "epochs": EPOCHS,
