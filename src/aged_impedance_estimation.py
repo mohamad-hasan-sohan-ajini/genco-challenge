@@ -3,7 +3,7 @@
 Run from any directory:
     /path/to/venv/bin/python /path/to/src/aged_impedance_estimation.py \
         --case 57 --seed 0 \
-        --ageing case57_aged_seed0_k2p5_s40_d10_a60_g2_normal
+        --ageing case57_aged_seed0_k2p5_s40_d10_a60_g2_normal --epochs 250
 
 Inputs: src/datakit_out/caseN/seedXX/AGEING_CASE_NAME/raw/
         src/grids/caseN_original.m
@@ -69,7 +69,7 @@ RUN_DIR = Path("finetune/case118_250000")
 NORMALIZER_NETWORK = "case118_ieee"
 PROJECT_DIR = Path(__file__).resolve().parent
 BATCH_SIZE = 16
-EPOCHS = 250
+DEFAULT_EPOCHS = 250
 LR = 3e-3
 MULTIPLIER_MIN = 1.0
 MULTIPLIER_MAX = 1.5
@@ -183,7 +183,15 @@ def parse_args(argv=None):
         required=True,
         help="Exact aged Datakit case directory name",
     )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=DEFAULT_EPOCHS,
+        help=f"Number of optimization epochs (default: {DEFAULT_EPOCHS})",
+    )
     options = parser.parse_args(argv)
+    if options.epochs <= 0:
+        parser.error("--epochs must be a positive integer")
     return options
 
 
@@ -192,6 +200,7 @@ def main(argv=None):
     CASE = options.case
     SEED = options.seed
     AGEING = options.ageing
+    epochs = options.epochs
     DATASET_ROOTS, OUTPUT_DIR, tb_root = experiment_paths(SEED, CASE, AGEING)
     for name, root in DATASET_ROOTS.items():
         for table in ("bus_data.parquet", "gen_data.parquet", "branch_data.parquet"):
@@ -224,7 +233,6 @@ def main(argv=None):
                 "ageing": AGEING,
                 "model_artifacts": model_artifact_spec(CASE),
                 "dataset_roots": {k: str(v) for k, v in DATASET_ROOTS.items()},
-                "epochs": EPOCHS,
                 "learning_rate": LR,
                 "batch_size": BATCH_SIZE,
                 "multiplier_bounds": [MULTIPLIER_MIN, MULTIPLIER_MAX],
@@ -562,7 +570,7 @@ def main(argv=None):
 
     with SummaryWriter(log_dir=str(TB_DIR)) as writer:
         last_model_mse = None
-        for epoch in range(EPOCHS):
+        for epoch in range(epochs):
             epoch_generator = torch.Generator().manual_seed(SEED + epoch)
             order = torch.randperm(
                 len(training_indices),
@@ -575,7 +583,7 @@ def main(argv=None):
 
             progress = tqdm(
                 range(0, len(order), BATCH_SIZE),
-                desc=f"Multiplier R/X epoch {epoch + 1}/{EPOCHS}",
+                desc=f"Multiplier R/X epoch {epoch + 1}/{epochs}",
                 leave=False,
             )
             for start in progress:
@@ -664,7 +672,6 @@ def main(argv=None):
             "actual_aged_admittance_normalized": actual_aged_admittance,
             "aged_scenario_std": aged_admittance_std,
             "training_indices": torch.as_tensor(training_indices),
-            "epochs": EPOCHS,
             "learning_rate": LR,
             "optimizer": "Adam",
             "multiplier_bounds": (MULTIPLIER_MIN, MULTIPLIER_MAX),

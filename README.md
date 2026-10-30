@@ -135,13 +135,15 @@ From the repository root:
 venv/bin/python src/aged_impedance_estimation.py \
   --case 57 \
   --seed 0 \
-  --ageing case57_aged_seed0_k2p5_s40_d10_a60_g2_normal
+  --ageing case57_aged_seed0_k2p5_s40_d10_a60_g2_normal \
+  --epochs 250
 ```
 
 The standalone script runs Section 7's projected Adam experiment and impedance
 plots; it excludes Section 8. `--case` accepts 14, 30, 57, or 118 (default: 57),
 and `--seed` selects the experiment seed (default: 0). `--ageing` is the exact
-aged Datakit case directory name. The example reads aged PF data from
+aged Datakit case directory name. `--epochs` controls the number of optimization
+epochs and defaults to 250. The example reads aged PF data from
 `src/datakit_out/case57/seed0/case57_aged_seed0_k2p5_s40_d10_a60_g2_normal/`
 and nominal line parameters from `src/grids/case57_original.m`.
 
