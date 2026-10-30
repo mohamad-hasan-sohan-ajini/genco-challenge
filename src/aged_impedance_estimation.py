@@ -1,9 +1,11 @@
 """Standalone Section 7 of 1_error_dist.ipynb (projected Adam only).
 
 Run from any directory:
-    /path/to/venv/bin/python /path/to/src/aged_impedance_estimation.py --case 57 --seed 0
+    /path/to/venv/bin/python /path/to/src/aged_impedance_estimation.py \
+        --case 57 --seed 0 \
+        --ageing case57_aged_seed0_k2p5_s40_d10_a60_g2_normal
 
-Inputs: src/datakit_out/caseN/seedXX/caseN_aged_seedXX_k2p5_scale40/raw/
+Inputs: src/datakit_out/caseN/seedXX/AGEING_CASE_NAME/raw/
         src/grids/caseN_original.m
 Outputs: src/results/caseN/seedXX/
 TensorBoard: src/tb/caseN/seedXX/impedance-multiplier-denoising-TIMESTAMP/
@@ -74,11 +76,11 @@ MULTIPLIER_MAX = 1.5
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def experiment_paths(seed, case=118):
+def experiment_paths(seed, case, ageing):
     """Resolve the current Datakit directory layout for one experiment."""
     root = PROJECT_DIR / "datakit_out" / f"case{case}" / f"seed{seed}"
     datasets = {
-        f"case{case}_aged": root / f"case{case}_aged_seed{seed}_k2p5_scale40",
+        f"case{case}_aged": root / ageing,
     }
     return (
         datasets,
@@ -176,6 +178,11 @@ def parse_args(argv=None):
         default=0,
         help="Experiment and dataset seed (default: 0)",
     )
+    parser.add_argument(
+        "--ageing",
+        required=True,
+        help="Exact aged Datakit case directory name",
+    )
     options = parser.parse_args(argv)
     return options
 
@@ -184,7 +191,8 @@ def main(argv=None):
     options = parse_args(argv)
     CASE = options.case
     SEED = options.seed
-    DATASET_ROOTS, OUTPUT_DIR, tb_root = experiment_paths(SEED, CASE)
+    AGEING = options.ageing
+    DATASET_ROOTS, OUTPUT_DIR, tb_root = experiment_paths(SEED, CASE, AGEING)
     for name, root in DATASET_ROOTS.items():
         for table in ("bus_data.parquet", "gen_data.parquet", "branch_data.parquet"):
             if not (root / "raw" / table).exists():
@@ -204,6 +212,7 @@ def main(argv=None):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(SEED)
     print(f"IEEE-{CASE}; seed: {SEED}; device: {DEVICE}")
+    print(f"Ageing case: {AGEING}")
     print(f"Datasets: {DATASET_ROOTS}")
     print(f"Results: {OUTPUT_DIR}")
     print(f"TensorBoard: {TB_DIR}")
@@ -212,6 +221,7 @@ def main(argv=None):
             {
                 "case": CASE,
                 "seed": SEED,
+                "ageing": AGEING,
                 "model_artifacts": model_artifact_spec(CASE),
                 "dataset_roots": {k: str(v) for k, v in DATASET_ROOTS.items()},
                 "epochs": EPOCHS,
@@ -337,9 +347,7 @@ def main(argv=None):
     # Datakit normalizes Y by baseMVA_orig/baseMVA. Recreate its directed-edge
     # admittance features from MATPOWER's R, X, B, tap, shift, and status fields.
     admittance_scale = float(normalizer.baseMVA_orig / normalizer.baseMVA)
-    branch_charging = torch.tensor(
-        [row[4] for row in branch_rows], dtype=torch.float32
-    )
+    branch_charging = torch.tensor([row[4] for row in branch_rows], dtype=torch.float32)
     tap_magnitude = torch.tensor(
         [row[8] if row[8] != 0.0 else 1.0 for row in branch_rows],
         dtype=torch.float32,
@@ -390,11 +398,7 @@ def main(argv=None):
     # Estimate R/X only for in-service branches without non-unity taps or shifts.
     learnable_line_mask = torch.tensor(
         [
-            row[10] > 0
-            and not (
-                (row[8] != 0.0 and row[8] != 1.0)
-                or row[9] != 0.0
-            )
+            row[10] > 0 and not ((row[8] != 0.0 and row[8] != 1.0) or row[9] != 0.0)
             for row in branch_rows
         ],
         dtype=torch.bool,
@@ -642,6 +646,7 @@ def main(argv=None):
         {
             "case": CASE,
             "seed": SEED,
+            "ageing": AGEING,
             "model_artifacts": model_artifact_spec(CASE),
             "dataset_roots": {key: str(path) for key, path in DATASET_ROOTS.items()},
             "edge_index": reference_edge_index,

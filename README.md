@@ -132,24 +132,26 @@ distributions.
 From the repository root:
 
 ```bash
-venv/bin/python src/aged_impedance_estimation.py --case 57 --seed 0
+venv/bin/python src/aged_impedance_estimation.py \
+  --case 57 \
+  --seed 0 \
+  --ageing case57_aged_seed0_k2p5_s40_d10_a60_g2_normal
 ```
 
-The standalone script runs Section 7's projected Adam experiment and its plots;
-it excludes Section 8. `--case` accepts 14, 30, 57, or 118 (default: 118), and
-`--seed` selects the experiment seed (default: 0). The example reads from
-`src/datakit_out/case57/seed0/case57_original/` and
-`src/datakit_out/case57/seed0/case57_aged_seed0_k2p5_scale40/`.
-Changing the case or seed updates all paths automatically. Network generation
-must use the same seed for the original and aged datasets.
+The standalone script runs Section 7's projected Adam experiment and impedance
+plots; it excludes Section 8. `--case` accepts 14, 30, 57, or 118 (default: 57),
+and `--seed` selects the experiment seed (default: 0). `--ageing` is the exact
+aged Datakit case directory name. The example reads aged PF data from
+`src/datakit_out/case57/seed0/case57_aged_seed0_k2p5_s40_d10_a60_g2_normal/`
+and nominal line parameters from `src/grids/case57_original.m`.
 
-Estimates, prediction tables, metrics, and title-free PDF plots at 300 DPI go to
-`src/results/case57/seed0/`. TensorBoard events go to
+Estimates and title-free impedance PDF plots at 300 DPI go to
+`src/results/case57/seed0/`. Signed PF error analysis belongs to
+`src/error_evaluation.py`. TensorBoard events go to
 `src/tb/case57/seed0/impedance-multiplier-denoising-TIMESTAMP/`. Paths are resolved
 relative to the script, so it can also be launched from another working directory.
 The script retains the notebook's 250 epochs, learning rate, multiplier bounds,
-and in-service/non-transformer learnability mask. Estimation scenarios are also
-used for the final PF comparison; those plots are not held-out evaluation.
+and in-service/non-transformer learnability mask.
 
 IEEE-118 retains `gridfm/genco-pf-transfer/finetune/case118_250000`. IEEE-14/30/57
 load matching config/checkpoint/normalizer bundles from `gridfm/genco-pf-datakit`,
