@@ -152,8 +152,11 @@ def load_model_bundle(case):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--case", type=int, choices=(14, 30, 57, 118), default=118,
-        help="IEEE bus system (default: 118)",
+        "--case",
+        type=int,
+        choices=(14, 30, 57, 118),
+        default=57,
+        help="IEEE bus system (default: 57)",
     )
     parser.add_argument(
         "--seed",
