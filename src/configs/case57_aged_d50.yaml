@@ -20,7 +20,7 @@ load:
 topology_perturbation:
   type: "random" # GENCO Datakit: one branch or generator outage per sample
   k: 1
-  n_topology_variants: 22 # Up to 22 PF samples per load scenario
+  n_topology_variants: 5 # Up to 22 PF samples per load scenario
   elements: [branch, gen]
   # Optional for type: "random": if provided, entry i is the probability of sampling i outages.
   # If provided, the generator samples over 0..k; otherwise it samples uniformly between 1 and k.
