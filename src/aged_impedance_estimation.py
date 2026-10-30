@@ -272,9 +272,7 @@ def main(argv=None):
                 output = model(batch)
                 pred = output["bus"]
                 if pred.size(1) <= max(VM_OUT, VA_OUT):
-                    raise ValueError(
-                        "Model bus output does not contain Vm and Va"
-                    )
+                    raise ValueError("Model bus output does not contain Vm and Va")
 
                 # Graphkit keeps Va in radians during inverse_transform.
                 # Datakit PF heads emit Vm/Va only (already in physical units).
@@ -326,11 +324,17 @@ def main(argv=None):
                                 .cpu()
                                 .numpy(),
                                 "pg_gt_mw": pg_target[a:b].cpu().numpy(),
-                                "pg_pred_mw": (pred[a:b, PG_OUT].cpu().numpy()
-                                               if has_power_outputs else np.full(b - a, np.nan)),
+                                "pg_pred_mw": (
+                                    pred[a:b, PG_OUT].cpu().numpy()
+                                    if has_power_outputs
+                                    else np.full(b - a, np.nan)
+                                ),
                                 "qg_gt_mvar": bus_y[a:b, QG_H].cpu().numpy(),
-                                "qg_pred_mvar": (pred[a:b, QG_OUT].cpu().numpy()
-                                                 if has_power_outputs else np.full(b - a, np.nan)),
+                                "qg_pred_mvar": (
+                                    pred[a:b, QG_OUT].cpu().numpy()
+                                    if has_power_outputs
+                                    else np.full(b - a, np.nan)
+                                ),
                             }
                         )
                     )
