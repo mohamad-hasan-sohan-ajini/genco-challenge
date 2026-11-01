@@ -7,7 +7,7 @@ Run from any directory:
 
 Inputs: src/datakit_out/caseN/seedXX/AGEING_CASE_NAME/raw/
         src/grids/caseN_original.m
-Outputs: src/results/caseN/seedXX/
+Outputs: src/results/caseN/seedXX/AGEING_CASE_NAME/
 TensorBoard: src/tb/caseN/seedXX/impedance-multiplier-denoising-TIMESTAMP/
 
 IEEE-118 retains the transfer checkpoint used in the notebook. IEEE-14/30/57
@@ -84,7 +84,7 @@ def experiment_paths(seed, case, ageing):
     }
     return (
         datasets,
-        PROJECT_DIR / "results" / f"case{case}" / f"seed{seed}",
+        PROJECT_DIR / "results" / f"case{case}" / f"seed{seed}" / ageing,
         PROJECT_DIR / "tb" / f"case{case}" / f"seed{seed}",
     )
 
@@ -190,6 +190,8 @@ def parse_args(argv=None):
         help=f"Number of optimization epochs (default: {DEFAULT_EPOCHS})",
     )
     options = parser.parse_args(argv)
+    if Path(options.ageing).name != options.ageing or options.ageing in {".", ".."}:
+        parser.error("--ageing must be a case directory name, not a path")
     if options.epochs <= 0:
         parser.error("--epochs must be a positive integer")
     return options

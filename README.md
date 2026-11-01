@@ -148,7 +148,8 @@ epochs and defaults to 250. The example reads aged PF data from
 and nominal line parameters from `src/grids/case57_original.m`.
 
 Estimates and title-free impedance PDF plots at 300 DPI go to
-`src/results/case57/seed0/`. Signed PF error analysis belongs to
+`src/results/case57/seed0/case57_aged_seed0_k2p5_s40_d10_a60_g2_normal/`.
+Signed PF error analysis belongs to
 `src/error_evaluation.py`. TensorBoard events go to
 `src/tb/case57/seed0/impedance-multiplier-denoising-TIMESTAMP/`. Paths are resolved
 relative to the script, so it can also be launched from another working directory.
