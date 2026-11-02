@@ -127,6 +127,66 @@ the pretrained checkpoint and normalizer, evaluates both datasets, saves predict
 tables under `results/local_predictions`, and plots the original-versus-aged error
 distributions.
 
+#### Prepare the complete official HF test dataset
+
+From `src`, run:
+
+```bash
+python prepare_HF_test_dataset.py
+```
+
+From the repository root, use
+`venv/bin/python src/prepare_HF_test_dataset.py`. The script downloads the complete
+`gridfm/pf_small_case57_ieee` raw dataset into
+`src/data/hf_full/case57_ieee/raw/`, reusing it when already complete. It checks
+the published scenario count against all three raw tables, so the earlier
+partitions-0–4 download cannot accidentally be used as the full dataset.
+`--data-dir` selects another source-cache parent containing `case57_ieee/`;
+`--local-files-only` requires already-cached HF data and model configuration.
+
+The script loads the official
+`gridfm/genco-pf-datakit/case57_ieee/base/seed0/case57_ieee_base_seed0.yaml`
+configuration and its pretrained normalizer. It calls GraphKit's
+`LitGridHeteroDataModule.setup("fit")` directly, including the preliminary seeded
+shuffle and the official split by `load_scenario_idx`. The required settings are
+`seed=0`, `test_ratio=0.1`, `val_ratio=0.1`, and
+`split_by_load_scenario_idx=True`. Every graph in the resulting test split is
+exported, with no additional sampling. The ratios apply to load-scenario groups,
+so the test graph count need not be exactly 10% of the total graph count.
+
+The standalone export is saved to `src/data/case57_test/` by default;
+`--output-dir` can select another location. It contains the selected raw Parquet
+tables, processed GraphKit graphs, configuration, pretrained normalizer stats,
+a manifest, and the full train/validation/test scenario-ID and load-group-ID
+lists for auditing. It prints the test count and verifies zero pairwise overlap
+for both scenario IDs and load-scenario IDs. A completed export is verified and
+reused on subsequent runs without accessing HF or the original dataset.
+
+Processed graph dictionaries are copied byte for byte before normalization or PF
+masking. Each graph retains its original `scenario_id`, node and edge stores,
+features, and targets. Export filenames `processed/data_index_0.pt`, etc. use
+local sequential indices to support ordinary GraphKit indexing; they do not
+renumber the `scenario_id` inside a graph. `scenario_splits.pt["test"]` maps these
+local indices to the original IDs. Only test graphs and test raw rows are copied;
+the train/validation audit files contain IDs, not graphs.
+
+From `src`, independently load the exported dataset with the official GraphKit
+dataset class through the provided helper:
+
+```python
+from prepare_HF_test_dataset import load_test_dataset
+
+dataset = load_test_dataset("data/case57_test")
+graph = dataset[0]
+print(len(dataset), graph.scenario_id.item())
+```
+
+This reads only the exported files and applies the bundled training normalizer
+at access time. Optional `data_normalizer=` and `transform=` arguments allow
+evaluation with another already-loaded model bundle and its PF task transforms.
+The export also works as a local Datakit dataset root with
+`error_evaluation.load_data_source()`; its processed cache prevents reprocessing.
+
 #### Compare nominal, aged, and HF data with the first evaluator
 
 From `src`, run:
