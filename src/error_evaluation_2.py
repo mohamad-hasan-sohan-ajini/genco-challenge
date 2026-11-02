@@ -165,6 +165,7 @@ def plot_comparisons(tables, case, seed, output_dir):
             {label: tables[label] for label in labels},
             output_path=output_path,
             colors=colors,
+            legend_loc="upper left",
         )
         plt.close(figure)
         paths.append(output_path)
@@ -173,6 +174,7 @@ def plot_comparisons(tables, case, seed, output_dir):
         {name: tables[name] for name in ("HF", *names.values())},
         output_path=combined_path,
         colors=colors,
+        legend_loc="upper left",
     )
     plt.close(figure)
     paths.append(combined_path)

@@ -219,7 +219,7 @@ four panels: signed prediction errors (`prediction - actual`) for voltage
 magnitude (p.u.), voltage angle (degrees), active power (MW), and reactive power
 (MVAr). Vm/Va include all buses; P/Q use the PF task's masked targets, as in
 `error_evaluation.py`. Colors identify the same dataset consistently across PDFs,
-and legends use full dataset names.
+and legends use full dataset names in the top-left corner of every panel.
 
 Outputs go to `src/results/error_evaluation_2/case57/seed0/`. Pairwise PDF names
 are `<first_dataset>_vs_<second_dataset>.pdf`. The dedicated HF-versus-normal
