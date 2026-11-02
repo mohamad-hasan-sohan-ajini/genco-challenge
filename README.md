@@ -180,6 +180,23 @@ have equal sample counts or identical ground truths. Histogram bins span the
 within the displayed range. Printed counts, means, and population standard
 deviations use all finite errors, including tails.
 
+After evaluation, the script prints one summary table per quantity and saves
+`Vm_error_summary.csv`, `Va_error_summary.csv`, `P_error_summary.csv`, and
+`Q_error_summary.csv` in the same output directory. Each table has these columns:
+`exp name`, `topo pert`, `gen pert`, `adm pert`, `mean error`,
+`mean error/error std`, and `skewness around zero`. Perturbation columns contain
+the actual type from the dataset's `raw/args.log` (`none` means disabled);
+missing settings are reported as `unknown`. When the log contains several
+generation entries, the last entry is used.
+
+Statistics use all finite errors, including histogram tails, separately for each
+quantity so their physical units are not mixed. The ratio is the signed mean
+divided by the population standard deviation (`ddof=0`). Skewness around zero is
+the uncentered moment ratio `mean(error**3) / mean(error**2)**1.5`, without
+subtracting the mean. A zero standard deviation gives an undefined mean/std
+ratio; an all-zero error series gives undefined skewness. Undefined values print
+as `NaN` and are saved as empty CSV cells.
+
 For a quick check, limit the evaluated scenarios and select a separate output folder:
 
 ```bash

@@ -16,6 +16,9 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import yaml
 
 from error_evaluation import (
     DEFAULT_DATA_CACHE,
@@ -159,6 +162,79 @@ def plot_comparisons(tables, case, seed, output_dir):
     return paths
 
 
+def load_perturbation_types(dataset_root):
+    """Read the last generation's actual settings rather than infer from names."""
+    sections = {
+        "topo pert": "topology_perturbation",
+        "gen pert": "generation_perturbation",
+        "adm pert": "admittance_perturbation",
+    }
+    log_path = Path(dataset_root) / "raw" / "args.log"
+    if not log_path.is_file():
+        return {column: "unknown" for column in sections}
+    text = log_path.read_text()
+    _, marker, latest_generation = text.rpartition("New generation started at")
+    if marker:
+        text = latest_generation.partition("\n")[2]
+    config = yaml.safe_load(text) or {}
+    return {
+        column: config.get(section, {}).get("type", "unknown")
+        for column, section in sections.items()
+    }
+
+
+def error_statistics(errors):
+    """Compute signed mean, mean/population std, and raw skewness about zero."""
+    errors = np.asarray(errors, dtype=np.float64)
+    errors = errors[np.isfinite(errors)]
+    if errors.size == 0:
+        raise ValueError("Cannot summarize an error series without finite values")
+    mean = errors.mean()
+    std = errors.std(ddof=0)
+    # Scaling cancels in mean(e**3) / mean(e**2)**1.5 and avoids overflowing
+    # or underflowing the raw powers. Do not subtract the error mean.
+    scale = np.abs(errors).max()
+    if scale > 0:
+        scaled = errors / scale
+        skewness = np.mean(scaled**3) / np.mean(scaled**2) ** 1.5
+    else:
+        skewness = np.nan
+    return {
+        "mean error": mean,
+        "mean error/error std": mean / std if std > 0 else np.nan,
+        "skewness around zero": skewness,
+    }
+
+
+def report_error_statistics(tables, case, seed, output_dir):
+    """Print and save a seven-column dataset summary for each physical quantity."""
+    data_root = PROJECT_DIR / "datakit_out" / f"case{case}" / f"seed{seed}"
+    settings = {name: load_perturbation_types(data_root / name) for name in tables}
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summaries = {}
+    variables = (("Vm", "p.u."), ("Va", "degrees"), ("P", "MW"), ("Q", "MVAr"))
+    for variable, unit in variables:
+        rows = []
+        for name, table in tables.items():
+            values = table.loc[table["variable"] == variable]
+            finite = np.isfinite(values["actual"]) & np.isfinite(values["error"])
+            errors = values.loc[finite, "error"].to_numpy(dtype=np.float64)
+            rows.append(
+                {
+                    "exp name": name,
+                    **settings[name],
+                    **error_statistics(errors),
+                }
+            )
+        summary = pd.DataFrame(rows)
+        summary.to_csv(output_dir / f"{variable}_error_summary.csv", index=False)
+        print(f"\n{variable} error summary (mean error in {unit}; population std, ddof=0):")
+        print(summary.to_string(index=False, float_format=lambda value: f"{value:.8g}"))
+        summaries[variable] = summary
+    return summaries
+
+
 def main(argv=None):
     options = parse_args(argv)
     output_dir = options.output_dir or (
@@ -177,8 +253,10 @@ def main(argv=None):
     for name, table in tables.items():
         table.to_parquet(output_dir / f"{name}_errors.parquet", index=False)
     paths = plot_comparisons(tables, options.case, options.seed, output_dir)
+    report_error_statistics(tables, options.case, options.seed, output_dir)
     print(
-        f"Saved {len(paths)} PDF comparisons and {len(tables)} error tables to {output_dir}"
+        f"Saved {len(paths)} PDF comparisons, {len(tables)} error tables, "
+        f"and 4 summary CSVs to {output_dir}"
     )
 
 
