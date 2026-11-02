@@ -127,6 +127,66 @@ the pretrained checkpoint and normalizer, evaluates both datasets, saves predict
 tables under `results/local_predictions`, and plots the original-versus-aged error
 distributions.
 
+#### Compare the nine local perturbation and ageing conditions
+
+From the repository root, run:
+
+```bash
+venv/bin/python src/error_evaluation_2.py --case 57 --seed 0
+```
+
+`error_evaluation_2.py` reads existing Datakit datasets from
+`src/datakit_out/case57/seed0/`. `--case` accepts 14, 30, 57, or 118 (default: 57),
+and `--seed` selects the data folder and the seed in aged dataset names (default:
+0). It loads the matching `gridfm/genco-pf-datakit/case57_ieee/base/seed0` model,
+configuration, and normalizer; the model training seed stays 0 for every data seed.
+All nine datasets must already exist, with `bus_data.parquet`, `gen_data.parquet`,
+and `branch_data.parquet` under their `raw` directories. These can be partitioned
+Parquet directories or individual files.
+
+The script evaluates each dataset once and writes these thirteen comparisons to
+separate PDFs (names below omit the common `case57_` prefix):
+
+| First condition | Second condition |
+| --- | --- |
+| `normal` | `one_out_topo` |
+| `normal` | `one_out_gen` |
+| `normal` | `one_out_adm` |
+| `normal` | `all_out` |
+| `all_out` | `one_out_topo` |
+| `all_out` | `one_out_gen` |
+| `all_out` | `one_out_adm` |
+| `normal` | `aged_seed0_k2p5_s40_d50_a60_g2_normal` |
+| `normal` | `aged_seed0_k2p5_s40_d10_a60_g2_normal` |
+| `aged_seed0_k2p5_s40_d10_a60_g2_normal` | `aged_seed0_k2p5_s40_d50_a60_g2_normal` |
+| `all_out` | `aged_seed0_k2p5_s40_d50_a60_g2_all_out` |
+| `all_out` | `aged_seed0_k2p5_s40_d10_a60_g2_all_out` |
+| `aged_seed0_k2p5_s40_d10_a60_g2_all_out` | `aged_seed0_k2p5_s40_d50_a60_g2_all_out` |
+
+A fourteenth PDF, `all_conditions.pdf`, overlays all nine conditions. Each PDF has
+four panels: signed prediction errors (`prediction - actual`) for voltage
+magnitude (p.u.), voltage angle (degrees), active power (MW), and reactive power
+(MVAr). Vm/Va include all buses; P/Q use the PF task's masked targets, as in
+`error_evaluation.py`. Colors identify the same dataset consistently across PDFs,
+and legends use full dataset names.
+
+Outputs go to `src/results/error_evaluation_2/case57/seed0/`. Pairwise PDF names
+are `<first_dataset>_vs_<second_dataset>.pdf`. Each dataset's predictions, targets,
+and signed errors are also saved as `<dataset>_errors.parquet`. The script evaluates
+all saved scenarios by default, including scenarios whose IDs contain solver gaps.
+The distributions compare each condition's available scenarios; datasets need not
+have equal sample counts or identical ground truths. Histogram bins span the
+0.5th–99.5th percentiles across the curves in each panel, with fractions normalized
+within the displayed range. Printed counts, means, and population standard
+deviations use all finite errors, including tails.
+
+For a quick check, limit the evaluated scenarios and select a separate output folder:
+
+```bash
+venv/bin/python src/error_evaluation_2.py --case 57 --seed 0 \
+  --max-samples 2 --output-dir /tmp/error_evaluation_2_check
+```
+
 ### 5. Run impedance estimation without the notebook
 
 From the repository root:
