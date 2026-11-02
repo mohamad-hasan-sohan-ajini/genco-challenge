@@ -151,7 +151,9 @@ Estimates and title-free impedance PDF plots at 300 DPI go to
 `src/results/case57/seed0/case57_aged_seed0_k2p5_s40_d10_a60_g2_normal/`.
 Signed PF error analysis belongs to
 `src/error_evaluation.py`. TensorBoard events go to
-`src/tb/case57/seed0/impedance-multiplier-denoising-TIMESTAMP/`. Paths are resolved
+`src/tb/case57/seed0/k2p5_s40_d10_a60_g2_normal/impedance-multiplier-denoising-TIMESTAMP/`.
+Each ageing type has its own folder, with a timestamped subfolder for each new run.
+Paths are resolved
 relative to the script, so it can also be launched from another working directory.
 The script retains the notebook's 250 epochs, learning rate, multiplier bounds,
 and in-service/non-transformer learnability mask.

@@ -8,7 +8,7 @@ Run from any directory:
 Inputs: src/datakit_out/caseN/seedXX/AGEING_CASE_NAME/raw/
         src/grids/caseN_original.m
 Outputs: src/results/caseN/seedXX/AGEING_CASE_NAME/
-TensorBoard: src/tb/caseN/seedXX/impedance-multiplier-denoising-TIMESTAMP/
+TensorBoard: src/tb/caseN/seedXX/AGEING_TYPE/impedance-multiplier-denoising-TIMESTAMP/
 
 IEEE-118 retains the transfer checkpoint used in the notebook. IEEE-14/30/57
 use their matching Datakit Base checkpoint (model-training seed 0). The CLI
@@ -85,7 +85,8 @@ def experiment_paths(seed, case, ageing):
     return (
         datasets,
         PROJECT_DIR / "results" / f"case{case}" / f"seed{seed}" / ageing,
-        PROJECT_DIR / "tb" / f"case{case}" / f"seed{seed}",
+        PROJECT_DIR / "tb" / f"case{case}" / f"seed{seed}"
+        / ageing.removeprefix(f"case{case}_aged_seed{seed}_"),
     )
 
 
