@@ -4,12 +4,13 @@ Run from the repository root:
     venv/bin/python src/error_evaluation_2.py --case 57 --seed 0
 
 Inputs: src/datakit_out/caseN/seedS/<dataset>/raw/
-        gridfm/pf_small_caseN_ieee on Hugging Face (partitions 0 through 4)
+        src/data/caseN_test/ (the entire prepared official HF test split)
 Outputs: src/results/error_evaluation_2/caseN/seedS/
 The data seed selects datasets; the pretrained model always uses training seed 0.
 """
 
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib
@@ -19,18 +20,19 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import torch
 import yaml
 
 from error_evaluation import (
     DEFAULT_DATA_CACHE,
     PROJECT_DIR,
-    HuggingFaceData,
     HuggingFaceModel,
     _evaluate_pair,
     _plot_error_tables,
     _validate_local_dataset_root,
     load_huggingface_model,
 )
+from prepare_HF_test_dataset import verify_splits
 
 
 def dataset_names(case, seed):
@@ -86,7 +88,11 @@ def parse_args(argv=None):
     parser.add_argument(
         "--max-samples",
         type=int,
-        help="Optional cap per dataset; default uses all local scenarios and up to 5,000 HF",
+        help="Optional cap for local datasets only; the entire HF test split is always evaluated",
+    )
+    parser.add_argument(
+        "--hf-test-dir", type=Path,
+        help="Prepared official HF test dataset root (default: data/caseN_test)",
     )
     parser.add_argument(
         "--output-dir",
@@ -101,7 +107,45 @@ def parse_args(argv=None):
     return options
 
 
-def evaluate_conditions(case, seed, *, max_samples=None):
+def prepared_hf_test_ids(root, case):
+    """Require a complete, disjoint official test export before evaluation."""
+    root = Path(root)
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            f"Prepared HF test dataset not found at {root}. "
+            "Run prepare_HF_test_dataset.py for case57, or supply --hf-test-dir "
+            "with the corresponding official test export."
+        )
+    manifest = json.loads(manifest_path.read_text())
+    if not (
+        manifest["dataset_repo"] == f"gridfm/pf_small_case{case}_ieee"
+        and manifest["seed"] == 0
+        and manifest["test_ratio"] == 0.1
+        and manifest["val_ratio"] == 0.1
+        and manifest["split_by_load_scenario_idx"] is True
+    ):
+        raise ValueError("HF test export does not match the selected case and official seed-0 split")
+    _validate_local_dataset_root(root)
+    splits = torch.load(root / "scenario_splits.pt", map_location="cpu", weights_only=True)
+    sets = verify_splits(splits, expected_count=manifest["source_sample_count"])
+    load_splits = torch.load(root / "load_scenario_splits.pt", map_location="cpu", weights_only=True)
+    verify_splits(load_splits, description="Load-scenario")
+    count = len(sets["test"])
+    files = {
+        int(path.stem.removeprefix("data_index_"))
+        for path in (root / "processed").glob("data_index_*.pt")
+    }
+    if (
+        count != manifest["test_sample_count"]
+        or files != set(range(count))
+        or not (root / "processed/processed_raw_files.done").is_file()
+    ):
+        raise ValueError("Prepared HF test dataset is incomplete; refusing partial evaluation")
+    return sets["test"]
+
+
+def evaluate_conditions(case, seed, *, max_samples=None, hf_test_dir=None):
     """Evaluate the HF baseline first, followed by each local condition once."""
     names = dataset_names(case, seed)
     data_root = PROJECT_DIR / "datakit_out" / f"case{case}" / f"seed{seed}"
@@ -116,6 +160,12 @@ def evaluate_conditions(case, seed, *, max_samples=None):
             "Missing required evaluation data:\n" + "\n".join(missing)
         )
 
+    hf_data = (
+        Path(hf_test_dir) if hf_test_dir is not None
+        else PROJECT_DIR / "data" / f"case{case}_test"
+    ).expanduser().resolve()
+    expected_hf_ids = prepared_hf_test_ids(hf_data, case)
+    print(f"HF test dataset: {hf_data} ({len(expected_hf_ids):,} samples; entire test split)")
     model = HuggingFaceModel(
         "gridfm/genco-pf-datakit",
         f"case{case}_ieee/base/seed0",
@@ -123,19 +173,17 @@ def evaluate_conditions(case, seed, *, max_samples=None):
         normalizer_network=f"case{case}_ieee",
     )
     bundle = load_huggingface_model(model)
-    hf_data = HuggingFaceData(
-        f"gridfm/pf_small_case{case}_ieee",
-        scenario_partitions=tuple(range(5)),
-    )
     tables = {
         "HF": _evaluate_pair(
             (hf_data, model),
             "HF",
-            max_samples=5_000 if max_samples is None else min(max_samples, 5_000),
+            max_samples=None,
             data_cache_dir=DEFAULT_DATA_CACHE,
             model_bundle=bundle,
         )
     }
+    if set(tables["HF"]["scenario_id"].unique()) != expected_hf_ids:
+        raise ValueError("Evaluated HF scenario IDs differ from the entire official test split")
     for name in names.values():
         tables[name] = _evaluate_pair(
             (data_root / name, model),
@@ -226,9 +274,10 @@ def error_statistics(errors):
 
 
 def report_error_statistics(tables, case, seed, output_dir):
-    """Print and save a seven-column dataset summary for each physical quantity."""
+    """Print and save dataset statistics and distinct evaluated scenario counts."""
     data_root = PROJECT_DIR / "datakit_out" / f"case{case}" / f"seed{seed}"
     names = sorted(tables, key=lambda name: name != "HF")
+    sample_counts = {name: int(tables[name]["scenario_id"].nunique()) for name in names}
     settings = {
         name: (
             {"topo pert": "unknown", "gen pert": "unknown", "adm pert": "unknown"}
@@ -251,6 +300,7 @@ def report_error_statistics(tables, case, seed, output_dir):
             rows.append(
                 {
                     "exp name": name,
+                    "number of samples": sample_counts[name],
                     **settings[name],
                     **error_statistics(errors),
                 }
@@ -278,6 +328,7 @@ def main(argv=None):
         options.case,
         options.seed,
         max_samples=options.max_samples,
+        hf_test_dir=options.hf_test_dir,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, table in tables.items():

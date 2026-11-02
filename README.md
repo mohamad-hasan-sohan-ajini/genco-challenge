@@ -245,10 +245,16 @@ venv/bin/python src/error_evaluation_2.py --case 57 --seed 0
 and `--seed` selects the data folder and the seed in aged dataset names (default:
 0). It loads the matching `gridfm/genco-pf-datakit/case57_ieee/base/seed0` model,
 configuration, and normalizer; the model training seed stays 0 for every data seed.
-It first evaluates an `HF` baseline from `gridfm/pf_small_case57_ieee`, downloading
-partitions 0–4 into `src/data/huggingface/` through the shared evaluator. At most
-5,000 HF scenarios are evaluated, or fewer when `--max-samples` is smaller.
-The HF repository follows `--case`, independently of the local data seed.
+It first evaluates the entire prepared official HF test split from
+`src/data/case57_test/` (21,694 scenarios in the current case57 export), including
+all of its original scenario IDs. Prepare it with `prepare_HF_test_dataset.py`
+before evaluation. The default root follows `--case` as `data/caseN_test/`;
+`--hf-test-dir` can select another matching prepared test export. The HF test split
+always uses the official seed-0 split, independently of the local data seed.
+The script prints its resolved path and sample count, verifies the split audit
+and processed graph inventory before inference, and checks the evaluated scenario
+IDs against the complete official test list afterward. It uses the exported
+dataset directly, without downloading or processing the original HF dataset.
 All nine local datasets must already exist, with `bus_data.parquet`, `gen_data.parquet`,
 and `branch_data.parquet` under their `raw` directories. These can be partitioned
 Parquet directories or individual files.
@@ -287,6 +293,7 @@ comparison is `HF_vs_case57_normal.pdf`. Each dataset's predictions, targets,
 and signed errors are also saved as `<dataset>_errors.parquet`, including
 `HF_errors.parquet` for the baseline. The script evaluates all saved local
 scenarios by default, including scenarios whose IDs contain solver gaps.
+`--max-samples` limits only the local datasets; it never truncates the HF test set.
 The distributions compare each condition's available scenarios; datasets need not
 have equal sample counts or identical ground truths. Histogram bins span the
 0.5th–99.5th percentiles across the curves in each panel, with fractions normalized
@@ -296,11 +303,14 @@ deviations use all finite errors, including tails.
 After evaluation, the script prints one summary table per quantity and saves
 `Vm_error_summary.csv`, `Va_error_summary.csv`, `P_error_summary.csv`, and
 `Q_error_summary.csv` in the same output directory. Each table has these columns:
-`exp name`, `topo pert`, `gen pert`, `adm pert`, `mean error`,
+`exp name`, `number of samples`, `topo pert`, `gen pert`, `adm pert`, `mean error`,
 `mean error/error std`, and `skewness around zero`. Perturbation columns contain
 the actual type from the dataset's `raw/args.log` (`none` means disabled);
 missing settings are reported as `unknown`. When the log contains several
 generation entries, the last entry is used.
+`number of samples` is the number of distinct evaluated PF scenario IDs in each
+dataset, not the number of bus/error observations. It is the same across that
+dataset's four summary rows, even though the quantities have different target counts.
 The `HF` baseline is the first row in every summary table. Its perturbation types
 are reported as `unknown` because the downloaded raw tables do not include a
 generation-settings log.
@@ -313,7 +323,8 @@ subtracting the mean. A zero standard deviation gives an undefined mean/std
 ratio; an all-zero error series gives undefined skewness. Undefined values print
 as `NaN` and are saved as empty CSV cells.
 
-For a quick check, limit the evaluated scenarios and select a separate output folder:
+To limit the local datasets while still evaluating the entire HF test set, select
+a separate output folder:
 
 ```bash
 venv/bin/python src/error_evaluation_2.py --case 57 --seed 0 \
