@@ -1,9 +1,10 @@
-"""Compare signed GENCO errors across local perturbation and ageing datasets.
+"""Compare signed GENCO errors across HF, perturbation, and ageing datasets.
 
 Run from the repository root:
     venv/bin/python src/error_evaluation_2.py --case 57 --seed 0
 
 Inputs: src/datakit_out/caseN/seedS/<dataset>/raw/
+        gridfm/pf_small_caseN_ieee on Hugging Face (partitions 0 through 4)
 Outputs: src/results/error_evaluation_2/caseN/seedS/
 The data seed selects datasets; the pretrained model always uses training seed 0.
 """
@@ -23,6 +24,7 @@ import yaml
 from error_evaluation import (
     DEFAULT_DATA_CACHE,
     PROJECT_DIR,
+    HuggingFaceData,
     HuggingFaceModel,
     _evaluate_pair,
     _plot_error_tables,
@@ -49,6 +51,7 @@ def dataset_names(case, seed):
 
 
 COMPARISONS = (
+    ("HF", "normal"),
     ("normal", "one_out_topo"),
     ("normal", "one_out_gen"),
     ("normal", "one_out_adm"),
@@ -83,7 +86,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--max-samples",
         type=int,
-        help="Optional cap on saved scenarios per dataset; default evaluates all",
+        help="Optional cap per dataset; default uses all local scenarios and up to 5,000 HF",
     )
     parser.add_argument(
         "--output-dir",
@@ -99,7 +102,7 @@ def parse_args(argv=None):
 
 
 def evaluate_conditions(case, seed, *, max_samples=None):
-    """Load one model and evaluate each local condition exactly once."""
+    """Evaluate the HF baseline first, followed by each local condition once."""
     names = dataset_names(case, seed)
     data_root = PROJECT_DIR / "datakit_out" / f"case{case}" / f"seed{seed}"
     missing = []
@@ -120,7 +123,19 @@ def evaluate_conditions(case, seed, *, max_samples=None):
         normalizer_network=f"case{case}_ieee",
     )
     bundle = load_huggingface_model(model)
-    tables = {}
+    hf_data = HuggingFaceData(
+        f"gridfm/pf_small_case{case}_ieee",
+        scenario_partitions=tuple(range(5)),
+    )
+    tables = {
+        "HF": _evaluate_pair(
+            (hf_data, model),
+            "HF",
+            max_samples=5_000 if max_samples is None else min(max_samples, 5_000),
+            data_cache_dir=DEFAULT_DATA_CACHE,
+            model_bundle=bundle,
+        )
+    }
     for name in names.values():
         tables[name] = _evaluate_pair(
             (data_root / name, model),
@@ -133,16 +148,18 @@ def evaluate_conditions(case, seed, *, max_samples=None):
 
 
 def plot_comparisons(tables, case, seed, output_dir):
-    """Write thirteen pairwise PDFs and one overlay of all nine conditions."""
+    """Write fourteen pairwise PDFs and one overlay including the HF baseline."""
     names = dataset_names(case, seed)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    # Keep the color for a condition identical across all fourteen figures.
+    # Keep the color for a condition identical across all figures.
     palette = plt.get_cmap("tab10")
     colors = {name: palette(index) for index, name in enumerate(names.values())}
+    colors["HF"] = palette(9)
+    comparison_names = {"HF": "HF", **names}
     paths = []
     for left, right in COMPARISONS:
-        labels = (names[left], names[right])
+        labels = (comparison_names[left], comparison_names[right])
         output_path = output_dir / f"{labels[0]}_vs_{labels[1]}.pdf"
         figure = _plot_error_tables(
             {label: tables[label] for label in labels},
@@ -153,7 +170,7 @@ def plot_comparisons(tables, case, seed, output_dir):
         paths.append(output_path)
     combined_path = output_dir / "all_conditions.pdf"
     figure = _plot_error_tables(
-        {name: tables[name] for name in names.values()},
+        {name: tables[name] for name in ("HF", *names.values())},
         output_path=combined_path,
         colors=colors,
     )
@@ -209,14 +226,23 @@ def error_statistics(errors):
 def report_error_statistics(tables, case, seed, output_dir):
     """Print and save a seven-column dataset summary for each physical quantity."""
     data_root = PROJECT_DIR / "datakit_out" / f"case{case}" / f"seed{seed}"
-    settings = {name: load_perturbation_types(data_root / name) for name in tables}
+    names = sorted(tables, key=lambda name: name != "HF")
+    settings = {
+        name: (
+            {"topo pert": "unknown", "gen pert": "unknown", "adm pert": "unknown"}
+            if name == "HF"
+            else load_perturbation_types(data_root / name)
+        )
+        for name in names
+    }
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     summaries = {}
     variables = (("Vm", "p.u."), ("Va", "degrees"), ("P", "MW"), ("Q", "MVAr"))
     for variable, unit in variables:
         rows = []
-        for name, table in tables.items():
+        for name in names:
+            table = tables[name]
             values = table.loc[table["variable"] == variable]
             finite = np.isfinite(values["actual"]) & np.isfinite(values["error"])
             errors = values.loc[finite, "error"].to_numpy(dtype=np.float64)
@@ -229,7 +255,9 @@ def report_error_statistics(tables, case, seed, output_dir):
             )
         summary = pd.DataFrame(rows)
         summary.to_csv(output_dir / f"{variable}_error_summary.csv", index=False)
-        print(f"\n{variable} error summary (mean error in {unit}; population std, ddof=0):")
+        print(
+            f"\n{variable} error summary (mean error in {unit}; population std, ddof=0):"
+        )
         print(summary.to_string(index=False, float_format=lambda value: f"{value:.8g}"))
         summaries[variable] = summary
     return summaries

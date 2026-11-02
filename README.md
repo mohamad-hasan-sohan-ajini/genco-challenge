@@ -127,7 +127,52 @@ the pretrained checkpoint and normalizer, evaluates both datasets, saves predict
 tables under `results/local_predictions`, and plots the original-versus-aged error
 distributions.
 
-#### Compare the nine local perturbation and ageing conditions
+#### Compare nominal, aged, and HF data with the first evaluator
+
+From `src`, run:
+
+```bash
+python error_evaluation.py --case 57 --seed 0
+```
+
+Or, from the repository root:
+
+```bash
+venv/bin/python src/error_evaluation.py --case 57 --seed 0
+```
+
+This evaluates all four aged datasets under `src/datakit_out/case57/seed0/`:
+
+- `case57_aged_seed0_k2p5_s40_d10_a60_g2_normal`
+- `case57_aged_seed0_k2p5_s40_d10_a60_g2_all_out`
+- `case57_aged_seed0_k2p5_s40_d50_a60_g2_normal`
+- `case57_aged_seed0_k2p5_s40_d50_a60_g2_all_out`
+
+Each comparison includes its nominal counterpart (`case57_normal` for `_normal`,
+`case57_all_out` for `_all_out`) and partitions 0–4 of `gridfm/pf_small_case57_ieee`.
+`--case` selects one IEEE
+system (14, 30, 57, or 118), while `--seed` selects the local data folder and the
+seed in the aged dataset names. Every dataset uses the corresponding
+`gridfm/genco-pf-datakit/caseN_ieee/base/seed0` model and its normalizer.
+
+The first evaluator retains its limit of 1,000 evaluated scenarios per dataset.
+Use `--max-samples 5000` for up to 5,000, or a smaller positive value for a quick
+check. Use `--ageing case57_aged_seed0_k2p5_s40_d10_a60_g2_normal` to evaluate
+only that aged dataset. The model is loaded once, and nominal and HF predictions
+are reused across comparisons. Each scenario supplies its own grid admittance and PF
+inputs and targets, with the same four signed-error panels and printed mean/std
+statistics as before.
+
+Each PDF is saved as
+`src/results/error_evaluation/case57/seed0/<aged-dataset-name>/pf_error_histograms.pdf`.
+The four ageing cases have separate folders. Repeating the same case/seed/ageing
+overwrites its existing PDF. `--output-dir` overrides the base directory while
+retaining one subfolder per aged dataset. Paths are relative to the script, so either command works from any
+working directory when the script path is provided correctly. The old
+`case57_original` and `k2p5_scale40` dataset directories are no longer used by
+this CLI.
+
+#### Compare local perturbation and ageing conditions with an HF baseline
 
 From the repository root, run:
 
@@ -140,15 +185,20 @@ venv/bin/python src/error_evaluation_2.py --case 57 --seed 0
 and `--seed` selects the data folder and the seed in aged dataset names (default:
 0). It loads the matching `gridfm/genco-pf-datakit/case57_ieee/base/seed0` model,
 configuration, and normalizer; the model training seed stays 0 for every data seed.
-All nine datasets must already exist, with `bus_data.parquet`, `gen_data.parquet`,
+It first evaluates an `HF` baseline from `gridfm/pf_small_case57_ieee`, downloading
+partitions 0–4 into `src/data/huggingface/` through the shared evaluator. At most
+5,000 HF scenarios are evaluated, or fewer when `--max-samples` is smaller.
+The HF repository follows `--case`, independently of the local data seed.
+All nine local datasets must already exist, with `bus_data.parquet`, `gen_data.parquet`,
 and `branch_data.parquet` under their `raw` directories. These can be partitioned
 Parquet directories or individual files.
 
-The script evaluates each dataset once and writes these thirteen comparisons to
-separate PDFs (names below omit the common `case57_` prefix):
+The script evaluates each dataset once and writes these fourteen comparisons to
+separate PDFs (local names below omit the common `case57_` prefix):
 
 | First condition | Second condition |
 | --- | --- |
+| `HF` | `normal` (all perturbations active) |
 | `normal` | `one_out_topo` |
 | `normal` | `one_out_gen` |
 | `normal` | `one_out_adm` |
@@ -163,7 +213,8 @@ separate PDFs (names below omit the common `case57_` prefix):
 | `all_out` | `aged_seed0_k2p5_s40_d10_a60_g2_all_out` |
 | `aged_seed0_k2p5_s40_d10_a60_g2_all_out` | `aged_seed0_k2p5_s40_d50_a60_g2_all_out` |
 
-A fourteenth PDF, `all_conditions.pdf`, overlays all nine conditions. Each PDF has
+A fifteenth PDF, `all_conditions.pdf`, overlays the HF baseline followed by all
+nine local conditions. Each PDF has
 four panels: signed prediction errors (`prediction - actual`) for voltage
 magnitude (p.u.), voltage angle (degrees), active power (MW), and reactive power
 (MVAr). Vm/Va include all buses; P/Q use the PF task's masked targets, as in
@@ -171,9 +222,11 @@ magnitude (p.u.), voltage angle (degrees), active power (MW), and reactive power
 and legends use full dataset names.
 
 Outputs go to `src/results/error_evaluation_2/case57/seed0/`. Pairwise PDF names
-are `<first_dataset>_vs_<second_dataset>.pdf`. Each dataset's predictions, targets,
-and signed errors are also saved as `<dataset>_errors.parquet`. The script evaluates
-all saved scenarios by default, including scenarios whose IDs contain solver gaps.
+are `<first_dataset>_vs_<second_dataset>.pdf`. The dedicated HF-versus-normal
+comparison is `HF_vs_case57_normal.pdf`. Each dataset's predictions, targets,
+and signed errors are also saved as `<dataset>_errors.parquet`, including
+`HF_errors.parquet` for the baseline. The script evaluates all saved local
+scenarios by default, including scenarios whose IDs contain solver gaps.
 The distributions compare each condition's available scenarios; datasets need not
 have equal sample counts or identical ground truths. Histogram bins span the
 0.5th–99.5th percentiles across the curves in each panel, with fractions normalized
@@ -188,6 +241,9 @@ After evaluation, the script prints one summary table per quantity and saves
 the actual type from the dataset's `raw/args.log` (`none` means disabled);
 missing settings are reported as `unknown`. When the log contains several
 generation entries, the last entry is used.
+The `HF` baseline is the first row in every summary table. Its perturbation types
+are reported as `unknown` because the downloaded raw tables do not include a
+generation-settings log.
 
 Statistics use all finite errors, including histogram tails, separately for each
 quantity so their physical units are not mixed. The ratio is the signed mean
