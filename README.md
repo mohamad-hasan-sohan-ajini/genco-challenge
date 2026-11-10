@@ -375,11 +375,10 @@ The script uses shuffled mini-batches, one projected Adam update per mini-batch,
 the configured learning rate and epoch count, multiplier bounds, and the
 in-service/non-transformer learnability mask.
 
-IEEE-118 retains `gridfm/genco-pf-transfer/finetune/case118_250000`. IEEE-14/30/57
-load matching config/checkpoint/normalizer bundles from `gridfm/genco-pf-datakit`,
-using the Base model with training seed 0 independently of the experiment seed.
+IEEE-14/30/57/118 all load matching config/checkpoint/normalizer bundles from
+`gridfm/genco-pf-datakit/case<case>_ieee/base/seed0`, using the Base model with
+training seed 0 independently of the experiment seed.
 Older configs are converted in memory for the installed Graphkit version.
-Existing IEEE-118 outputs in the old seed-only directories are not moved.
 
 For the resistance-only aging model, use `aged_resistance_estimation.py`. It
 optimizes only the resistance multiplier and fixes every reactance multiplier at
