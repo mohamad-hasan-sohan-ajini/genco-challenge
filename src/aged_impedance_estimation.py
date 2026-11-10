@@ -1,4 +1,4 @@
-"""Standalone Section 7 of 1_error_dist.ipynb (projected Adam only).
+"""Standalone Section 7 of 1_error_dist.ipynb (projected mini-batch Adam).
 
 Run from any directory:
     /path/to/venv/bin/python /path/to/src/aged_impedance_estimation.py \
@@ -15,7 +15,7 @@ use their matching Datakit Base checkpoint (model-training seed 0). The CLI
 seed selects experimental data, independently of the pretrained model's seed.
 
 GENCO is frozen. Independent R/X multipliers use the notebook's [1, 1.5]
-bounds and one full-dataset Adam update per epoch. Aged admittances and
+bounds and one projected Adam update per mini-batch. Aged admittances and
 impedances are used only for diagnostics and the true-impedance baseline.
 Impedance plots are title-free PDFs at 300 DPI. Signed-error analysis and
 Section 8 are excluded.
@@ -223,6 +223,11 @@ def initialize_impedance_multipliers(
     return resistance_multiplier, reactance_multiplier, parameters
 
 
+def create_multiplier_optimizer(parameters):
+    """Create the Adam optimizer used for per-mini-batch updates."""
+    return torch.optim.Adam(parameters, lr=LR)
+
+
 def main(argv=None, *, resistance_only=False):
     options = parse_args(argv, resistance_only=resistance_only)
     CASE = options.case
@@ -266,8 +271,10 @@ def main(argv=None, *, resistance_only=False):
                 "estimation_target": estimation_target,
                 "model_artifacts": model_artifact_spec(CASE),
                 "dataset_roots": {k: str(v) for k, v in DATASET_ROOTS.items()},
+                "optimizer": "Adam",
                 "learning_rate": LR,
                 "batch_size": BATCH_SIZE,
+                "update_rule": "one projected optimizer step per mini-batch",
                 "multiplier_bounds": [MULTIPLIER_MIN, MULTIPLIER_MAX],
                 "tensorboard_dir": str(TB_DIR),
                 "notebook_section": 7,
@@ -458,7 +465,7 @@ def main(argv=None, *, resistance_only=False):
         initial_reactance,
         resistance_only=resistance_only,
     )
-    optimizer = torch.optim.Adam(multiplier_parameters, lr=LR)
+    optimizer = create_multiplier_optimizer(multiplier_parameters)
 
     def estimated_impedance_components():
         """Map dimensionless ageing multipliers to per-unit R/X."""
@@ -573,7 +580,7 @@ def main(argv=None, *, resistance_only=False):
         )
         return resistance_mismatch, reactance_mismatch, combined
 
-    def log_epoch_metrics(writer, step, model_mse, gradient_norms=None):
+    def log_epoch_metrics(writer, step, model_mse, gradient_norm=None):
         resistance_mismatch, reactance_mismatch, combined = impedance_metrics()
         resistance_values = resistance_multiplier.detach()[learnable_line_mask]
         reactance_values = reactance_multiplier.detach()[learnable_line_mask]
@@ -594,10 +601,10 @@ def main(argv=None, *, resistance_only=False):
             step,
         )
         writer.add_scalar("epoch/learning_rate", optimizer.param_groups[0]["lr"], step)
-        if gradient_norms is not None:
+        if gradient_norm is not None:
             writer.add_scalar(
                 "epoch/gradient_norm",
-                float(np.linalg.norm(gradient_norms)),
+                gradient_norm,
                 step,
             )
         writer.flush()
@@ -612,7 +619,12 @@ def main(argv=None, *, resistance_only=False):
         )
 
     with SummaryWriter(log_dir=str(TB_DIR)) as writer:
-        last_model_mse = None
+        initial_model_mse = evaluate_model_mse(
+            training_indices,
+            "Checking initial multipliers",
+        )
+        log_epoch_metrics(writer, 0, initial_model_mse)
+
         for epoch in range(epochs):
             epoch_generator = torch.Generator().manual_seed(SEED + epoch)
             order = torch.randperm(
@@ -620,9 +632,7 @@ def main(argv=None, *, resistance_only=False):
                 generator=epoch_generator,
             )
             order = order.tolist()
-            epoch_loss_sum = 0.0
-            epoch_target_count = 0
-            optimizer.zero_grad()
+            batch_gradient_norms = []
 
             progress = tqdm(
                 range(0, len(order), BATCH_SIZE),
@@ -634,6 +644,7 @@ def main(argv=None, *, resistance_only=False):
                 leave=False,
             )
             for start in progress:
+                optimizer.zero_grad(set_to_none=True)
                 positions = order[start : start + BATCH_SIZE]
                 batch_indices = [training_indices[position] for position in positions]
                 current_admittance = admittance_from_estimated_impedance()
@@ -646,38 +657,39 @@ def main(argv=None, *, resistance_only=False):
                 batch = Batch.from_data_list(graphs).to(DEVICE)
 
                 output = model(batch)
-                model_loss, target_count = masked_pf_model_loss(batch, output)
-                # Accumulate the exact full-dataset mean gradient. Stepping here would
-                # apply LR once per mini-batch and make the result batch-size dependent.
-                (model_loss * target_count).backward()
+                model_loss, _ = masked_pf_model_loss(batch, output)
+                model_loss.backward()
 
-                epoch_loss_sum += model_loss.item() * target_count
-                epoch_target_count += target_count
-                progress.set_postfix(model_rmse=f"{model_loss.item() ** 0.5:.3e}")
-
-            epoch_model_mse = epoch_loss_sum / epoch_target_count
-            gradient_norms = []
-            for parameter in multiplier_parameters:
-                parameter.grad.div_(epoch_target_count)
-                parameter.grad[~learnable_line_mask] = 0.0
-                if not torch.isfinite(parameter.grad).all():
-                    target = "resistance" if resistance_only else "R/X"
-                    raise RuntimeError(f"Non-finite {target} multiplier gradient")
-                gradient_norms.append(parameter.grad[learnable_line_mask].norm().item())
-            if epoch == 0:
-                log_epoch_metrics(writer, 0, epoch_model_mse)
-
-            optimizer.step()
-            with torch.no_grad():
+                parameter_gradient_norms = []
                 for parameter in multiplier_parameters:
-                    parameter.clamp_(MULTIPLIER_MIN, MULTIPLIER_MAX)
-                    parameter[~learnable_line_mask] = 1.0
+                    parameter.grad[~learnable_line_mask] = 0.0
+                    if not torch.isfinite(parameter.grad).all():
+                        target = "resistance" if resistance_only else "R/X"
+                        raise RuntimeError(
+                            f"Non-finite {target} multiplier gradient"
+                        )
+                    parameter_gradient_norms.append(
+                        parameter.grad[learnable_line_mask].norm().item()
+                    )
+                batch_gradient_norms.append(
+                    float(np.linalg.norm(parameter_gradient_norms))
+                )
+
+                # Mini-batch Adam update: step and enforce bounds
+                # after every mini-batch rather than once per full dataset.
+                optimizer.step()
+                with torch.no_grad():
+                    for parameter in multiplier_parameters:
+                        parameter.clamp_(MULTIPLIER_MIN, MULTIPLIER_MAX)
+                        parameter[~learnable_line_mask] = 1.0
+
+                progress.set_postfix(model_rmse=f"{model_loss.item() ** 0.5:.3e}")
 
             candidate_mse = evaluate_model_mse(
                 training_indices,
                 f"Checking multiplier epoch {epoch + 1}",
             )
-            last_model_mse = candidate_mse
+            mean_gradient_norm = float(np.mean(batch_gradient_norms))
             (
                 model_rmse,
                 mismatch_mae,
@@ -686,7 +698,12 @@ def main(argv=None, *, resistance_only=False):
                 reactance_median,
                 resistance_max,
                 reactance_max,
-            ) = log_epoch_metrics(writer, epoch + 1, candidate_mse, gradient_norms)
+            ) = log_epoch_metrics(
+                writer,
+                epoch + 1,
+                candidate_mse,
+                mean_gradient_norm,
+            )
             if resistance_only:
                 print(
                     f"Epoch {epoch + 1:02d}: model RMSE={model_rmse:.6e}, "
@@ -732,6 +749,8 @@ def main(argv=None, *, resistance_only=False):
             "training_indices": torch.as_tensor(training_indices),
             "learning_rate": LR,
             "optimizer": "Adam",
+            "batch_size": BATCH_SIZE,
+            "update_rule": "one projected optimizer step per mini-batch",
             "multiplier_bounds": (MULTIPLIER_MIN, MULTIPLIER_MAX),
             "constraint": (
                 "R is the initial value times a bounded ageing multiplier; X is fixed"

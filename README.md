@@ -355,7 +355,7 @@ venv/bin/python src/aged_impedance_estimation.py \
   --epochs 250
 ```
 
-The standalone script runs Section 7's projected Adam experiment and impedance
+The standalone script runs Section 7's projected mini-batch Adam experiment and impedance
 plots; it excludes Section 8. `--case` accepts 14, 30, 57, or 118 (default: 57),
 and `--seed` selects the experiment seed (default: 0). `--ageing` is the exact
 aged Datakit case directory name. `--epochs` controls the number of optimization
@@ -371,8 +371,9 @@ Signed PF error analysis belongs to
 Each ageing type has its own folder, with a timestamped subfolder for each new run.
 Paths are resolved
 relative to the script, so it can also be launched from another working directory.
-The script retains the notebook's 250 epochs, learning rate, multiplier bounds,
-and in-service/non-transformer learnability mask.
+The script uses shuffled mini-batches, one projected Adam update per mini-batch,
+the configured learning rate and epoch count, multiplier bounds, and the
+in-service/non-transformer learnability mask.
 
 IEEE-118 retains `gridfm/genco-pf-transfer/finetune/case118_250000`. IEEE-14/30/57
 load matching config/checkpoint/normalizer bundles from `gridfm/genco-pf-datakit`,
