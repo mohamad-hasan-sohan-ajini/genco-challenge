@@ -1,5 +1,5 @@
 network:
-  name: "case57_aged_seed0_k2p5_s40_d10_a60_g2" # 10% maximum degradation
+  name: "case57_aged_seed0_k2p5_s40_d10_a60_logr" # 10% maximum resistance degradation
   source: "file" # Data source for the grid; options: pglib, file
   # WARNING: the following parameter is only used if source is "file"
   network_dir: "./grids" # if using source "file", this is the directory containing the network file

@@ -1,11 +1,11 @@
-"""Age only transmission-line R/X on ('bus', 'connects', 'bus') edges.
+"""Age transmission-line resistance on ('bus', 'connects', 'bus') edges.
 
 MATPOWER's mpc.branch table defines bus-to-bus branches. Generator-to-bus
 and bus-to-generator edges describe generator attachments, not line
 impedances; their source data in mpc.gen are never modified here.
 Transformer branches and out-of-service branches retain their parameters.
-Every eligible line receives a right-truncated Weibull age and a shared
-age-dependent degradation multiplier for resistance and reactance.
+Every eligible line receives a right-truncated Weibull age and a logarithmic
+age-dependent degradation multiplier for resistance. Reactance is unchanged.
 """
 
 import argparse
@@ -67,13 +67,7 @@ def parse_args():
         "--max-degradation",
         type=float,
         default=0.5,
-        help="Fractional R/X increase at maximum age; 0.5 means 50%% (default: 0.5)",
-    )
-    parser.add_argument(
-        "--degradation-exponent",
-        type=float,
-        default=2.0,
-        help="Exponent gamma in D = max_degradation * (age / max_age)^gamma (default: 2)",
+        help="Fractional resistance increase at maximum age; 0.5 means 50%% (default: 0.5)",
     )
     parser.add_argument(
         "--seed",
@@ -84,12 +78,12 @@ def parse_args():
     parser.add_argument(
         "--output",
         type=Path,
-        help="Base output filename (default: grids/case<case>_aged.m); seed, k, s, degradation percent d, maximum age a and exponent g are appended",
+        help="Base output filename (default: grids/case<case>_aged.m); seed, k, s, degradation percent d, maximum age a and logarithmic-resistance model tag logr are appended",
     )
     args = parser.parse_args()
     if args.output is None:
         args.output = Path("grids") / f"case{args.case}_aged.m"
-    for name in ("weibull_shape", "weibull_scale", "max_age", "degradation_exponent"):
+    for name in ("weibull_shape", "weibull_scale", "max_age"):
         value = getattr(args, name)
         if not math.isfinite(value) or value <= 0:
             parser.error(f"--{name.replace('_', '-')} must be finite and positive")
@@ -118,15 +112,19 @@ def sample_truncated_weibull(rng, shape, scale, max_age):
     return scale * (-math.log1p(-probability)) ** (1.0 / shape)
 
 
+def resistance_degradation(age, max_age, max_degradation):
+    """Return D_R = D_R,max * ln(1 + age / max_age) / ln(2)."""
+    return max_degradation * math.log1p(age / max_age) / math.log(2.0)
+
+
 def parameterized_output_path(
     output, seed, shape, scale, max_degradation=0.5, max_age=60.0,
-    degradation_exponent=2.0,
 ):
-    """Append seed/k/s/d/a/g tags; d is a percentage, s and a are years.
+    """Append seed/k/s/d/a/logr tags; d is a percentage, s and a are years.
 
     Encode decimals as ``p`` to keep the MATPOWER function name valid.
-    Include every age/degradation parameter so changing the degradation cap,
-    truncation age or exponent creates a distinct file and corrected-file cache.
+    Include every age/degradation parameter and the model name so these networks
+    cannot collide with files produced by the former power-law R/X model.
     """
 
     def tag(value):
@@ -144,7 +142,7 @@ def parameterized_output_path(
     return output.with_name(
         f"{output.stem}_seed{tag(seed)}_k{tag(shape)}_s{tag(scale)}"
         f"_d{tag(degradation_percent)}_a{tag(max_age)}"
-        f"_g{tag(degradation_exponent)}{output.suffix}"
+        f"_logr{output.suffix}"
     )
 
 
@@ -219,7 +217,7 @@ def main():
     source_network_name = f"case{args.case}_ieee"
     output_path = parameterized_output_path(
         args.output, args.seed, args.weibull_shape, args.weibull_scale,
-        args.max_degradation, args.max_age, args.degradation_exponent,
+        args.max_degradation, args.max_age,
     )
 
     source = Path(get_pglib_source_path(source_network_name))
@@ -265,19 +263,15 @@ def main():
         age = sample_truncated_weibull(
             rng, args.weibull_shape, args.weibull_scale, args.max_age
         )
-        degradation = (
-            args.max_degradation * (age / args.max_age) ** args.degradation_exponent
+        degradation = resistance_degradation(
+            age, args.max_age, args.max_degradation
         )
         multiplier = 1.0 + degradation
         affected_resistance = float(f"{original_resistance * multiplier:.16g}")
-        affected_reactance = float(f"{original_reactance * multiplier:.16g}")
-        updated_values = {2: affected_resistance, 3: affected_reactance}
-        # Replace only R and X, preserving all other MATPOWER fields, spacing and comments.
-        # reverse order keeps earlier match offsets unchanged
-        for column in (3, 2):
-            token = tokens[column]
-            updated = f"{updated_values[column]:.16g}"
-            data = data[: token.start()] + updated + data[token.end() :]
+        # Replace only R, preserving X and every other MATPOWER field verbatim.
+        token = tokens[2]
+        updated = f"{affected_resistance:.16g}"
+        data = data[: token.start()] + updated + data[token.end() :]
         lines[idx] = data + (marker + comment if marker else "")
         affected_lines.append(
             {
@@ -290,8 +284,8 @@ def main():
                 "affected_resistance": affected_resistance,
                 "resistance_multiplier": multiplier,
                 "original_reactance": original_reactance,
-                "affected_reactance": affected_reactance,
-                "reactance_multiplier": multiplier,
+                "affected_reactance": original_reactance,
+                "reactance_multiplier": 1.0,
             }
         )
 
@@ -323,7 +317,8 @@ def main():
         "weibull_scale_years": args.weibull_scale,
         "age_range_years": [0.0, args.max_age],
         "max_degradation": args.max_degradation,
-        "degradation_exponent": args.degradation_exponent,
+        "degradation_model": "normalized_logarithmic_resistance_only",
+        "modified_branch_parameters": ["resistance"],
         "affected_lines": affected_lines,
     }
     age_plot_path = output_path.with_name(f"{output_path.stem}_age_distribution.png")

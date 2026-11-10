@@ -1,7 +1,7 @@
 # GENCO challenge
 
-This repository studies how ageing-related changes in transmission-line resistance and
-reactance affect the errors produced by a pretrained GENCO power-flow model. The
+This repository studies how ageing-related changes in transmission-line resistance
+affect the errors produced by a pretrained GENCO power-flow model. The
 workflow creates an aged IEEE 118-bus network, generates comparable datasets for the
 original and aged networks, and compares their prediction-error distributions.
 
@@ -46,7 +46,6 @@ create an aged version. For example:
   --weibull-scale 40 \
   --max-age 60 \
   --max-degradation 0.5 \
-  --degradation-exponent 2 \
   --seed 0 \
   --output grids/case118_aged.m
 ```
@@ -54,27 +53,27 @@ create an aged version. For example:
 Every eligible line (in-service, non-transformer branch) receives an age sampled
 from a Weibull distribution conditioned on ages between 0 and 60 years, using
 inverse-CDF sampling rather than clipping. The fractional degradation is
-`D = 0.5 * (age / 60)^2`, and both R and X are multiplied by the same `1 + D`.
-All five parameters shown above are configurable; the seed makes the sampled ages
-reproducible. Transformer branches, out-of-service branches, and generator data
-remain unchanged. The command creates:
+`D_R = 0.5 * ln(1 + age / 60) / ln(2)`, and only R is multiplied by `1 + D_R`;
+X remains unchanged. The distribution, age limit, and maximum degradation shown
+above are configurable; the seed makes the sampled ages reproducible. Transformer
+branches, out-of-service branches, and generator data remain unchanged. The command creates:
 
-- `grids/case118_aged_seed0_k2p5_s40_d50_a60_g2.m`: the aged network;
-- `grids/case118_aged_seed0_k2p5_s40_d50_a60_g2.json`: distribution settings, sampled ages, degradations,
+- `grids/case118_aged_seed0_k2p5_s40_d50_a60_logr.m`: the aged network;
+- `grids/case118_aged_seed0_k2p5_s40_d50_a60_logr.json`: distribution settings, sampled ages, degradations,
   and each eligible line's original and aged values;
-- `grids/case118_aged_seed0_k2p5_s40_d50_a60_g2_age_distribution.png`: a histogram of the
+- `grids/case118_aged_seed0_k2p5_s40_d50_a60_logr_age_distribution.png`: a histogram of the
   sampled ages of eligible bus-to-bus lines;
-- `grids/case118_aged_seed0_k2p5_s40_d50_a60_g2_weibull_distribution.pdf`: the theoretical
+- `grids/case118_aged_seed0_k2p5_s40_d50_a60_logr_weibull_distribution.pdf`: the theoretical
   right-truncated Weibull age probability density, normalized over 0–60 years;
 - `grids/case118_original.m`: the unmodified source network.
 
 The script appends compact parameter tags: `seed` for the random seed, `k` for
 Weibull shape, `s` for scale in years, `d` for maximum degradation in percent,
-`a` for maximum age in years, and `g` for the degradation exponent. For example,
+`a` for maximum age in years, and `logr` for the logarithmic resistance-only model. For example,
 `--max-degradation 0.05` gives `d5`, while `0.5` gives `d50`. Decimal points become
 `p` so the matching MATPOWER function name is valid. Set `network.name` in the
 aged YAML configuration to the generated stem, for example
-`case118_aged_seed0_k2p5_s40_d50_a60_g2`.
+`case118_aged_seed0_k2p5_s40_d50_a60_logr`.
 
 Existing network files and dataset paths are not renamed automatically. When using
 a new filename, update the aged YAML's `network.name` and the aged dataset path in
@@ -89,7 +88,7 @@ For example, from `src`:
 ```
 
 This selects `case57_ieee` and writes `grids/case57_original.m`,
-`grids/case57_aged_seed0_k2p5_s40_d50_a60_g2.m`, its JSON report, and its age histogram.
+`grids/case57_aged_seed0_k2p5_s40_d50_a60_logr.m`, its JSON report, and its age histogram.
 Without `--output`, the base filename is `grids/case<case>_aged.m`.
 An explicit `--output` still overrides that base path.
 
@@ -107,7 +106,7 @@ Dataset size, random seed, perturbations, solver settings, and output directorie
 controlled by the corresponding YAML files. For the seed-0 examples, set
 `settings.seed: 0` and `settings.data_dir: "./datakit_out/case118/seed0"` in both
 IEEE-118 configs, and set the aged `network.name` to
-`case118_aged_seed0_k2p5_s40_d50_a60_g2`. For IEEE-57, use the `case57` configs and
+`case118_aged_seed0_k2p5_s40_d50_a60_logr`. For IEEE-57, use the `case57` configs and
 `./datakit_out/case57/seed0`. Datakit adds the network name and `raw` to
 `settings.data_dir`. When changing the seed, update the directory and aged
 network filename as well; YAML paths are literal, not templates.
@@ -203,10 +202,10 @@ venv/bin/python src/error_evaluation.py --case 57 --seed 0
 
 This evaluates all four aged datasets under `src/datakit_out/case57/seed0/`:
 
-- `case57_aged_seed0_k2p5_s40_d10_a60_g2_normal`
-- `case57_aged_seed0_k2p5_s40_d10_a60_g2_all_out`
-- `case57_aged_seed0_k2p5_s40_d50_a60_g2_normal`
-- `case57_aged_seed0_k2p5_s40_d50_a60_g2_all_out`
+- `case57_aged_seed0_k2p5_s40_d10_a60_logr_normal`
+- `case57_aged_seed0_k2p5_s40_d10_a60_logr_all_out`
+- `case57_aged_seed0_k2p5_s40_d50_a60_logr_normal`
+- `case57_aged_seed0_k2p5_s40_d50_a60_logr_all_out`
 
 Each comparison includes its nominal counterpart (`case57_normal` for `_normal`,
 `case57_all_out` for `_all_out`) and partitions 0–4 of `gridfm/pf_small_case57_ieee`.
@@ -217,7 +216,7 @@ seed in the aged dataset names. Every dataset uses the corresponding
 
 The first evaluator retains its limit of 1,000 evaluated scenarios per dataset.
 Use `--max-samples 5000` for up to 5,000, or a smaller positive value for a quick
-check. Use `--ageing case57_aged_seed0_k2p5_s40_d10_a60_g2_normal` to evaluate
+check. Use `--ageing case57_aged_seed0_k2p5_s40_d10_a60_logr_normal` to evaluate
 only that aged dataset. The model is loaded once, and nominal and HF predictions
 are reused across comparisons. Each scenario supplies its own grid admittance and PF
 inputs and targets, with the same four signed-error panels and printed mean/std
@@ -272,12 +271,12 @@ separate PDFs (local names below omit the common `case57_` prefix):
 | `all_out` | `one_out_topo` |
 | `all_out` | `one_out_gen` |
 | `all_out` | `one_out_adm` |
-| `normal` | `aged_seed0_k2p5_s40_d50_a60_g2_normal` |
-| `normal` | `aged_seed0_k2p5_s40_d10_a60_g2_normal` |
-| `aged_seed0_k2p5_s40_d10_a60_g2_normal` | `aged_seed0_k2p5_s40_d50_a60_g2_normal` |
-| `all_out` | `aged_seed0_k2p5_s40_d50_a60_g2_all_out` |
-| `all_out` | `aged_seed0_k2p5_s40_d10_a60_g2_all_out` |
-| `aged_seed0_k2p5_s40_d10_a60_g2_all_out` | `aged_seed0_k2p5_s40_d50_a60_g2_all_out` |
+| `normal` | `aged_seed0_k2p5_s40_d50_a60_logr_normal` |
+| `normal` | `aged_seed0_k2p5_s40_d10_a60_logr_normal` |
+| `aged_seed0_k2p5_s40_d10_a60_logr_normal` | `aged_seed0_k2p5_s40_d50_a60_logr_normal` |
+| `all_out` | `aged_seed0_k2p5_s40_d50_a60_logr_all_out` |
+| `all_out` | `aged_seed0_k2p5_s40_d10_a60_logr_all_out` |
+| `aged_seed0_k2p5_s40_d10_a60_logr_all_out` | `aged_seed0_k2p5_s40_d50_a60_logr_all_out` |
 
 A fifteenth PDF, `all_conditions.pdf`, overlays the HF baseline followed by all
 nine local conditions. Each PDF has
@@ -339,7 +338,7 @@ From the repository root:
 venv/bin/python src/aged_impedance_estimation.py \
   --case 57 \
   --seed 0 \
-  --ageing case57_aged_seed0_k2p5_s40_d10_a60_g2_normal \
+  --ageing case57_aged_seed0_k2p5_s40_d10_a60_logr_normal \
   --epochs 250
 ```
 
@@ -348,14 +347,14 @@ plots; it excludes Section 8. `--case` accepts 14, 30, 57, or 118 (default: 57),
 and `--seed` selects the experiment seed (default: 0). `--ageing` is the exact
 aged Datakit case directory name. `--epochs` controls the number of optimization
 epochs and defaults to 250. The example reads aged PF data from
-`src/datakit_out/case57/seed0/case57_aged_seed0_k2p5_s40_d10_a60_g2_normal/`
+`src/datakit_out/case57/seed0/case57_aged_seed0_k2p5_s40_d10_a60_logr_normal/`
 and nominal line parameters from `src/grids/case57_original.m`.
 
 Estimates and title-free impedance PDF plots at 300 DPI go to
-`src/results/case57/seed0/case57_aged_seed0_k2p5_s40_d10_a60_g2_normal/`.
+`src/results/case57/seed0/case57_aged_seed0_k2p5_s40_d10_a60_logr_normal/`.
 Signed PF error analysis belongs to
 `src/error_evaluation.py`. TensorBoard events go to
-`src/tb/case57/seed0/k2p5_s40_d10_a60_g2_normal/impedance-multiplier-denoising-TIMESTAMP/`.
+`src/tb/case57/seed0/k2p5_s40_d10_a60_logr_normal/impedance-multiplier-denoising-TIMESTAMP/`.
 Each ageing type has its own folder, with a timestamped subfolder for each new run.
 Paths are resolved
 relative to the script, so it can also be launched from another working directory.
