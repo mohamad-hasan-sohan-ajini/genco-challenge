@@ -10,9 +10,9 @@ Inputs: src/datakit_out/caseN/seedXX/AGEING_CASE_NAME/raw/
 Outputs: src/results/caseN/seedXX/AGEING_CASE_NAME/
 TensorBoard: src/tb/caseN/seedXX/AGEING_TYPE/impedance-multiplier-denoising-TIMESTAMP/
 
-IEEE-118 retains the transfer checkpoint used in the notebook. IEEE-14/30/57
-use their matching Datakit Base checkpoint (model-training seed 0). The CLI
-seed selects experimental data, independently of the pretrained model's seed.
+IEEE-14/30/57/118 use their matching Datakit Base checkpoint (model-training
+seed 0). The CLI seed selects experimental data, independently of the
+pretrained model's seed.
 
 GENCO is frozen. Independent R/X multipliers use the notebook's [1, 1.5]
 bounds and one projected Adam update per mini-batch. Aged admittances and
@@ -63,14 +63,12 @@ from gridfm_graphkit.io.config_version import resolve_config
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-MODEL_REPO_ID = "gridfm/genco-pf-transfer"
+MODEL_REPO_ID = "gridfm/genco-pf-datakit"
 MODEL_REVISION = "main"
-RUN_DIR = Path("finetune/case118_250000")
-NORMALIZER_NETWORK = "case118_ieee"
 PROJECT_DIR = Path(__file__).resolve().parent
 BATCH_SIZE = 16
-DEFAULT_EPOCHS = 250
-LR = 3e-3
+DEFAULT_EPOCHS = 20
+LR = 3e-4
 MULTIPLIER_MIN = 1.0
 MULTIPLIER_MAX = 1.5
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -116,17 +114,10 @@ def read_matpower_branch_rows(case_path):
 
 def model_artifact_spec(case):
     """Select one matched PF checkpoint/config/normalizer bundle per case."""
-    if case == 118:
-        return {
-            "repo_id": MODEL_REPO_ID,
-            "run_dir": str(RUN_DIR),
-            "config_filename": "case118_250000.yaml",
-            "normalizer_network": NORMALIZER_NETWORK,
-        }
-    if case not in (14, 30, 57):
+    if case not in (14, 30, 57, 118):
         raise ValueError(f"Unsupported IEEE case: {case}")
     return {
-        "repo_id": "gridfm/genco-pf-datakit",
+        "repo_id": MODEL_REPO_ID,
         "run_dir": f"case{case}_ieee/base/seed0",
         "config_filename": f"case{case}_ieee_base_seed0.yaml",
         "normalizer_network": f"case{case}_ieee",
@@ -665,9 +656,7 @@ def main(argv=None, *, resistance_only=False):
                     parameter.grad[~learnable_line_mask] = 0.0
                     if not torch.isfinite(parameter.grad).all():
                         target = "resistance" if resistance_only else "R/X"
-                        raise RuntimeError(
-                            f"Non-finite {target} multiplier gradient"
-                        )
+                        raise RuntimeError(f"Non-finite {target} multiplier gradient")
                     parameter_gradient_norms.append(
                         parameter.grad[learnable_line_mask].norm().item()
                     )
