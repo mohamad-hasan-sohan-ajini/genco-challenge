@@ -99,7 +99,7 @@ MATPOWER networks. Generate both datasets from `src`:
 
 ```bash
 ../venv/bin/gridfm_datakit generate configs/case118.yaml
-../venv/bin/gridfm_datakit generate configs/case118_aged.yaml
+../venv/bin/gridfm_datakit generate configs/case118_aged_d50.yaml
 ```
 
 Dataset size, random seed, perturbations, solver settings, and output directories are
