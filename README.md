@@ -373,7 +373,9 @@ Paths are resolved
 relative to the script, so it can also be launched from another working directory.
 The script uses shuffled mini-batches, one projected Adam update per mini-batch,
 the configured learning rate and epoch count, multiplier bounds, and the
-in-service/non-transformer learnability mask.
+in-service/non-transformer learnability mask. TensorBoard stores each learnable
+MATPOWER branch's resistance and reactance multiplier at initialization and after
+every epoch, along with R/X multiplier distribution histograms.
 
 IEEE-14/30/57/118 all load matching config/checkpoint/normalizer bundles from
 `gridfm/genco-pf-datakit/case<case>_ieee/base/seed0`, using the Base model with

@@ -219,6 +219,48 @@ def create_multiplier_optimizer(parameters):
     return torch.optim.Adam(parameters, lr=LR)
 
 
+def log_line_multipliers(
+    writer,
+    step,
+    learnable_line_mask,
+    resistance_multiplier,
+    reactance_multiplier,
+):
+    """Log exact per-branch R/X multipliers and their distributions."""
+    branch_rows = (
+        learnable_line_mask.nonzero(as_tuple=False).flatten().add(1).cpu().tolist()
+    )
+    resistance_values = resistance_multiplier.detach()[learnable_line_mask].cpu()
+    reactance_values = reactance_multiplier.detach()[learnable_line_mask].cpu()
+
+    writer.add_histogram(
+        "multipliers/resistance_distribution",
+        resistance_values,
+        step,
+    )
+    writer.add_histogram(
+        "multipliers/reactance_distribution",
+        reactance_values,
+        step,
+    )
+    for branch_row, resistance, reactance in zip(
+        branch_rows,
+        resistance_values.tolist(),
+        reactance_values.tolist(),
+        strict=True,
+    ):
+        writer.add_scalar(
+            f"multipliers/resistance/branch_{branch_row:04d}",
+            resistance,
+            step,
+        )
+        writer.add_scalar(
+            f"multipliers/reactance/branch_{branch_row:04d}",
+            reactance,
+            step,
+        )
+
+
 def main(argv=None, *, resistance_only=False):
     options = parse_args(argv, resistance_only=resistance_only)
     CASE = options.case
@@ -575,6 +617,13 @@ def main(argv=None, *, resistance_only=False):
         resistance_mismatch, reactance_mismatch, combined = impedance_metrics()
         resistance_values = resistance_multiplier.detach()[learnable_line_mask]
         reactance_values = reactance_multiplier.detach()[learnable_line_mask]
+        log_line_multipliers(
+            writer,
+            step,
+            learnable_line_mask,
+            resistance_multiplier,
+            reactance_multiplier,
+        )
         mismatch_mae = combined.abs().mean().item()
         mismatch_rmse = combined.square().mean().sqrt().item()
         model_rmse = model_mse**0.5
