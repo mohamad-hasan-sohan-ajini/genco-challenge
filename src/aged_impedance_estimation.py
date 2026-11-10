@@ -3,7 +3,7 @@
 Run from any directory:
     /path/to/venv/bin/python /path/to/src/aged_impedance_estimation.py \
         --case 57 --seed 0 \
-        --ageing case57_aged_seed0_k2p5_s40_d10_a60_g2_normal --epochs 250
+        --ageing case57_aged_seed0_k2p5_s40_d50_a60_logr --epochs 250
 
 Inputs: src/datakit_out/caseN/seedXX/AGEING_CASE_NAME/raw/
         src/grids/caseN_original.m
