@@ -102,6 +102,19 @@ MATPOWER networks. Generate both datasets from `src`:
 ../venv/bin/gridfm_datakit generate configs/case118_aged_d50.yaml
 ```
 
+You can combine both stages—creating all aged networks and then generating the
+nominal and 50%-maximum-resistance-aging datasets—using a single script. Run it
+from the repository root:
+
+```bash
+./src/generate_all_datasets.sh
+```
+
+The script first creates every aged network for IEEE-14, 30, 57, and 118. Only
+after all network files exist does it run GridFM Datakit for each case's nominal
+and `d50` YAML configurations. All paths and generation parameters are defined at
+the beginning of the script; it takes no command-line arguments.
+
 Dataset size, random seed, perturbations, solver settings, and output directories are
 controlled by the corresponding YAML files. For the seed-0 examples, set
 `settings.seed: 0` and `settings.data_dir: "./datakit_out/case118/seed0"` in both
