@@ -1,0 +1,45 @@
+# Default aged IEEE-30 configuration (50% maximum resistance degradation).
+network:
+  name: "case30_aged_seed0_k2p5_s40_d50_a60_logr"
+  source: "file"
+  network_dir: "./grids"
+
+load:
+  generator: "agg_load_profile"
+  agg_profile: "default"
+  scenarios: 1000
+  sigma: 0.2
+  change_reactive_power: true
+  global_range: 0.4
+  max_scaling_factor: 4.0
+  step_size: 0.1
+  start_scaling_factor: 1.0
+
+topology_perturbation:
+  type: "random"
+  k: 1
+  n_topology_variants: 5
+  elements: [branch, gen]
+
+generation_perturbation:
+  type: "cost_permutation"
+  sigma: 1.0
+
+admittance_perturbation:
+  type: "random_perturbation"
+  sigma: 0.2
+
+settings:
+  num_processes: 8
+  data_dir: "./datakit_out/case30/seed0"
+  large_chunk_size: 250
+  overwrite: true
+  mode: "pf"
+  include_dc_res: true
+  enable_solver_logs: true
+  pf_fast: true
+  dcpf_fast: true
+  pf_solver: "powermodel"
+  opf_formulation: "polar"
+  max_iter: 200
+  seed: 0
