@@ -351,7 +351,7 @@ From the repository root:
 venv/bin/python src/aged_impedance_estimation.py \
   --case 57 \
   --seed 0 \
-  --ageing case57_aged_seed0_k2p5_s40_d10_a60_logr_normal \
+  --ageing case57_aged_seed0_k2p5_s40_d50_a60_logr \
   --epochs 250
 ```
 
@@ -360,14 +360,14 @@ plots; it excludes Section 8. `--case` accepts 14, 30, 57, or 118 (default: 57),
 and `--seed` selects the experiment seed (default: 0). `--ageing` is the exact
 aged Datakit case directory name. `--epochs` controls the number of optimization
 epochs and defaults to 250. The example reads aged PF data from
-`src/datakit_out/case57/seed0/case57_aged_seed0_k2p5_s40_d10_a60_logr_normal/`
+`src/datakit_out/case57/seed0/case57_aged_seed0_k2p5_s40_d50_a60_logr/`
 and nominal line parameters from `src/grids/case57_original.m`.
 
 Estimates and title-free impedance PDF plots at 300 DPI go to
-`src/results/case57/seed0/case57_aged_seed0_k2p5_s40_d10_a60_logr_normal/`.
+`src/results/case57/seed0/case57_aged_seed0_k2p5_s40_d50_a60_logr/`.
 Signed PF error analysis belongs to
 `src/error_evaluation.py`. TensorBoard events go to
-`src/tb/case57/seed0/k2p5_s40_d10_a60_logr_normal/impedance-multiplier-denoising-TIMESTAMP/`.
+`src/tb/case57/seed0/k2p5_s40_d50_a60_logr/impedance-multiplier-denoising-TIMESTAMP/`.
 Each ageing type has its own folder, with a timestamped subfolder for each new run.
 Paths are resolved
 relative to the script, so it can also be launched from another working directory.
@@ -379,6 +379,27 @@ load matching config/checkpoint/normalizer bundles from `gridfm/genco-pf-datakit
 using the Base model with training seed 0 independently of the experiment seed.
 Older configs are converted in memory for the installed Graphkit version.
 Existing IEEE-118 outputs in the old seed-only directories are not moved.
+
+For the resistance-only aging model, use `aged_resistance_estimation.py`. It
+optimizes only the resistance multiplier and fixes every reactance multiplier at
+exactly 1.0:
+
+```bash
+venv/bin/python src/aged_resistance_estimation.py \
+  --case 57 \
+  --seed 0 \
+  --ageing case57_aged_seed0_k2p5_s40_d50_a60_logr \
+  --epochs 150
+```
+
+Run resistance-only estimation for IEEE-14, 30, 57, and 118 sequentially with:
+
+```bash
+./src/run_all_resistance_estimations.sh
+```
+
+Resistance-only artifacts are written below each experiment's `resistance_only/`
+results and TensorBoard subdirectories, so joint R/X results are not overwritten.
 
 ### 6. Replot saved results for the paper
 

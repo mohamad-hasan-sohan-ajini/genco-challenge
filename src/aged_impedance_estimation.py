@@ -85,7 +85,10 @@ def experiment_paths(seed, case, ageing):
     return (
         datasets,
         PROJECT_DIR / "results" / f"case{case}" / f"seed{seed}" / ageing,
-        PROJECT_DIR / "tb" / f"case{case}" / f"seed{seed}"
+        PROJECT_DIR
+        / "tb"
+        / f"case{case}"
+        / f"seed{seed}"
         / ageing.removeprefix(f"case{case}_aged_seed{seed}_"),
     )
 
@@ -164,8 +167,13 @@ def load_model_bundle(case):
     return model, normalizer, args, paths
 
 
-def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+def parse_args(argv=None, *, resistance_only=False):
+    description = (
+        "Estimate aged line resistance with reactance fixed at nominal values."
+        if resistance_only
+        else __doc__
+    )
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
         "--case",
         type=int,
@@ -198,13 +206,34 @@ def parse_args(argv=None):
     return options
 
 
-def main(argv=None):
-    options = parse_args(argv)
+def initialize_impedance_multipliers(
+    initial_resistance,
+    initial_reactance,
+    *,
+    resistance_only=False,
+):
+    """Create learnable multipliers, freezing X at one when estimating R only."""
+    resistance_multiplier = torch.nn.Parameter(torch.ones_like(initial_resistance))
+    if resistance_only:
+        reactance_multiplier = torch.ones_like(initial_reactance)
+        parameters = [resistance_multiplier]
+    else:
+        reactance_multiplier = torch.nn.Parameter(torch.ones_like(initial_reactance))
+        parameters = [resistance_multiplier, reactance_multiplier]
+    return resistance_multiplier, reactance_multiplier, parameters
+
+
+def main(argv=None, *, resistance_only=False):
+    options = parse_args(argv, resistance_only=resistance_only)
     CASE = options.case
     SEED = options.seed
     AGEING = options.ageing
     epochs = options.epochs
     DATASET_ROOTS, OUTPUT_DIR, tb_root = experiment_paths(SEED, CASE, AGEING)
+    estimation_target = "resistance" if resistance_only else "impedance"
+    if resistance_only:
+        OUTPUT_DIR = OUTPUT_DIR / "resistance_only"
+        tb_root = tb_root / "resistance_only"
     for name, root in DATASET_ROOTS.items():
         for table in ("bus_data.parquet", "gen_data.parquet", "branch_data.parquet"):
             if not (root / "raw" / table).exists():
@@ -214,7 +243,7 @@ def main(argv=None):
         raise FileNotFoundError(original_case_path)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     TB_RUN_NAME = datetime.now().strftime(
-        "impedance-multiplier-denoising-%Y%m%d-%H%M%S-%f"
+        f"{estimation_target}-multiplier-denoising-%Y%m%d-%H%M%S-%f"
     )
     TB_DIR = tb_root / TB_RUN_NAME
     DENOISED_Y_PATH = OUTPUT_DIR / "denoised_admittance.pt"
@@ -234,6 +263,7 @@ def main(argv=None):
                 "case": CASE,
                 "seed": SEED,
                 "ageing": AGEING,
+                "estimation_target": estimation_target,
                 "model_artifacts": model_artifact_spec(CASE),
                 "dataset_roots": {k: str(v) for k, v in DATASET_ROOTS.items()},
                 "learning_rate": LR,
@@ -406,7 +436,7 @@ def main(argv=None):
     forward_shunt = self_forward - series_y
     reverse_shunt = self_reverse - series_y
 
-    # Estimate R/X only for in-service branches without non-unity taps or shifts.
+    # Estimate ordinary in-service lines only; transformers remain fixed.
     learnable_line_mask = torch.tensor(
         [
             row[10] > 0 and not ((row[8] != 0.0 and row[8] != 1.0) or row[9] != 0.0)
@@ -419,9 +449,15 @@ def main(argv=None):
 
     if not learnable_line_mask.any():
         raise RuntimeError("No eligible transmission lines are available")
-    resistance_multiplier = torch.nn.Parameter(torch.ones_like(initial_resistance))
-    reactance_multiplier = torch.nn.Parameter(torch.ones_like(initial_reactance))
-    multiplier_parameters = [resistance_multiplier, reactance_multiplier]
+    (
+        resistance_multiplier,
+        reactance_multiplier,
+        multiplier_parameters,
+    ) = initialize_impedance_multipliers(
+        initial_resistance,
+        initial_reactance,
+        resistance_only=resistance_only,
+    )
     optimizer = torch.optim.Adam(multiplier_parameters, lr=LR)
 
     def estimated_impedance_components():
@@ -530,7 +566,11 @@ def main(argv=None):
         resistance_mismatch = resistance_mismatch[learnable_line_mask]
         reactance_mismatch = actual_aged_reactance - estimated_reactance.detach()
         reactance_mismatch = reactance_mismatch[learnable_line_mask]
-        combined = torch.cat([resistance_mismatch, reactance_mismatch])
+        combined = (
+            resistance_mismatch
+            if resistance_only
+            else torch.cat([resistance_mismatch, reactance_mismatch])
+        )
         return resistance_mismatch, reactance_mismatch, combined
 
     def log_epoch_metrics(writer, step, model_mse, gradient_norms=None):
@@ -586,7 +626,11 @@ def main(argv=None):
 
             progress = tqdm(
                 range(0, len(order), BATCH_SIZE),
-                desc=f"Multiplier R/X epoch {epoch + 1}/{epochs}",
+                desc=(
+                    f"Resistance multiplier epoch {epoch + 1}/{epochs}"
+                    if resistance_only
+                    else f"Multiplier R/X epoch {epoch + 1}/{epochs}"
+                ),
                 leave=False,
             )
             for start in progress:
@@ -617,7 +661,8 @@ def main(argv=None):
                 parameter.grad.div_(epoch_target_count)
                 parameter.grad[~learnable_line_mask] = 0.0
                 if not torch.isfinite(parameter.grad).all():
-                    raise RuntimeError("Non-finite R/X multiplier gradient")
+                    target = "resistance" if resistance_only else "R/X"
+                    raise RuntimeError(f"Non-finite {target} multiplier gradient")
                 gradient_norms.append(parameter.grad[learnable_line_mask].norm().item())
             if epoch == 0:
                 log_epoch_metrics(writer, 0, epoch_model_mse)
@@ -642,13 +687,22 @@ def main(argv=None):
                 resistance_max,
                 reactance_max,
             ) = log_epoch_metrics(writer, epoch + 1, candidate_mse, gradient_norms)
-            print(
-                f"Epoch {epoch + 1:02d}: model RMSE={model_rmse:.6e}, "
-                f"R/X mismatch MAE={mismatch_mae:.6e}, "
-                f"R/X mismatch RMSE={mismatch_rmse:.6e}, "
-                f"median multipliers=({resistance_median:.4f}, {reactance_median:.4f}), "
-                f"max multipliers=({resistance_max:.4f}, {reactance_max:.4f})"
-            )
+            if resistance_only:
+                print(
+                    f"Epoch {epoch + 1:02d}: model RMSE={model_rmse:.6e}, "
+                    f"R mismatch MAE={mismatch_mae:.6e}, "
+                    f"R mismatch RMSE={mismatch_rmse:.6e}, "
+                    f"median R multiplier={resistance_median:.4f}, "
+                    f"max R multiplier={resistance_max:.4f}"
+                )
+            else:
+                print(
+                    f"Epoch {epoch + 1:02d}: model RMSE={model_rmse:.6e}, "
+                    f"R/X mismatch MAE={mismatch_mae:.6e}, "
+                    f"R/X mismatch RMSE={mismatch_rmse:.6e}, "
+                    f"median multipliers=({resistance_median:.4f}, {reactance_median:.4f}), "
+                    f"max multipliers=({resistance_max:.4f}, {reactance_max:.4f})"
+                )
 
     estimated_resistance, estimated_reactance = estimated_impedance_components()
     final_admittance = admittance_from_estimated_impedance().detach().cpu()
@@ -658,6 +712,7 @@ def main(argv=None):
             "case": CASE,
             "seed": SEED,
             "ageing": AGEING,
+            "estimation_target": estimation_target,
             "model_artifacts": model_artifact_spec(CASE),
             "dataset_roots": {key: str(path) for key, path in DATASET_ROOTS.items()},
             "edge_index": reference_edge_index,
@@ -678,12 +733,23 @@ def main(argv=None):
             "learning_rate": LR,
             "optimizer": "Adam",
             "multiplier_bounds": (MULTIPLIER_MIN, MULTIPLIER_MAX),
-            "constraint": "R and X are initial values times bounded ageing multipliers",
+            "constraint": (
+                "R is the initial value times a bounded ageing multiplier; X is fixed"
+                if resistance_only
+                else "R and X are initial values times bounded ageing multipliers"
+            ),
         },
         DENOISED_Y_PATH,
     )
     print(f"Optimized {int(learnable_line_mask.sum()):,} non-transformer lines")
-    print(f"Saved bounded multiplier-space R/X and recovered Y to {DENOISED_Y_PATH}")
+    if resistance_only:
+        print(
+            f"Saved bounded resistance multiplier and recovered Y to {DENOISED_Y_PATH}"
+        )
+    else:
+        print(
+            f"Saved bounded multiplier-space R/X and recovered Y to {DENOISED_Y_PATH}"
+        )
     print(f"TensorBoard logs: {TB_DIR}")
     print(f"Launch with: tensorboard --logdir {TB_DIR}")
 
@@ -735,11 +801,12 @@ def main(argv=None):
         "Resistance R (p.u.)",
         "resistance_comparison.pdf",
     )
-    plot_impedance_component(
-        "reactance",
-        "Reactance X (p.u.)",
-        "reactance_comparison.pdf",
-    )
+    if not resistance_only:
+        plot_impedance_component(
+            "reactance",
+            "Reactance X (p.u.)",
+            "reactance_comparison.pdf",
+        )
 
     # Parity plots compare estimated impedance against the aged ground truth.
     def plot_impedance_parity(component, symbol, output_name):
@@ -793,11 +860,12 @@ def main(argv=None):
         "R",
         "resistance_estimated_vs_aged.pdf",
     )
-    plot_impedance_parity(
-        "reactance",
-        "X",
-        "reactance_estimated_vs_aged.pdf",
-    )
+    if not resistance_only:
+        plot_impedance_parity(
+            "reactance",
+            "X",
+            "reactance_estimated_vs_aged.pdf",
+        )
 
     print(f"Completed IEEE-{CASE}, seed {SEED}. Results: {OUTPUT_DIR}")
 
