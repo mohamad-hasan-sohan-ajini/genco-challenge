@@ -418,7 +418,8 @@ venv/bin/python src/aged_resistance_estimation.py \
   --epochs 150
 ```
 
-Run resistance-only estimation for IEEE-14, 30, 57, and 118 sequentially with:
+Run resistance-only estimation for IEEE-14, 30, 57, and 118 across dataset
+seeds 0–4 with:
 
 ```bash
 ./src/run_all_resistance_estimations.sh
