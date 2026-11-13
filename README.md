@@ -403,6 +403,77 @@ Run resistance-only estimation for IEEE-14, 30, 57, and 118 sequentially with:
 Resistance-only artifacts are written below each experiment's `resistance_only/`
 results and TensorBoard subdirectories, so joint R/X results are not overwritten.
 
+The versioned pipeline `aged_impedance_estimation_2.py` uses power-flow MSE by
+default and can optionally add an aging-prior KL divergence:
+
+```text
+loss = power_flow_mse + KL_WEIGHT * aging_multiplier_kl
+```
+
+Its expected resistance distribution is obtained by transforming deterministic
+quantiles of the configured right-truncated Weibull age distribution through the
+logarithmic resistance-aging equation. Its expected reactance multiplier is 1.0,
+matching the resistance-only aging model. The estimated and expected distributions
+are represented by differentiable soft histograms, and the code minimizes
+`KL(estimated || expected)`. The bins, bandwidth, and aging parameters are
+defined at the top of the script. Run one case without KL regularization with:
+
+```bash
+venv/bin/python src/aged_impedance_estimation_2.py \
+  --case 57 \
+  --seed 0 \
+  --ageing case57_aged_seed0_k2p5_s40_d50_a60_logr \
+  --epochs 20
+```
+
+Pass a positive `--kl-weight` to enable KL regularization and set its strength:
+
+```bash
+venv/bin/python src/aged_impedance_estimation_2.py \
+  --case 57 \
+  --seed 0 \
+  --ageing case57_aged_seed0_k2p5_s40_d50_a60_logr \
+  --epochs 20 \
+  --kl-weight 0.01
+```
+
+Results and TensorBoard logs are isolated under `pf_only/` when KL is disabled
+and `kl_physics_informed/` when it is enabled. Each invocation creates a unique
+`run-YYYYMMDD-HHMMSS-microseconds/` results directory, so repeated runs never
+overwrite previous artifacts. KL-enabled runs additionally log the total and
+weighted KL and separate R/X KL terms.
+
+Run impedance estimation for IEEE-14, 30, 57, and 118 across seeds 0–4 with:
+
+```bash
+./src/run_all_impedance_estimations_2.sh
+```
+
+The batch script sets `KL_WEIGHT=0.0` by default. Change it to a positive value
+such as `0.01` to enable KL regularization for every run.
+
+For resistance-only estimation, which fixes reactance at its nominal value, run
+one case with KL enabled using:
+
+```bash
+venv/bin/python src/aged_resistance_estimation_2.py \
+  --case 57 \
+  --seed 0 \
+  --ageing case57_aged_seed0_k2p5_s40_d50_a60_logr \
+  --epochs 20 \
+  --kl-weight 0.01
+```
+
+Or run IEEE-14, 30, 57, and 118 across seeds 0–4. This batch script also uses
+`KL_WEIGHT=0.0` by default:
+
+```bash
+./src/run_all_resistance_estimations_2.sh
+```
+
+In resistance-only mode, the physics term is the full resistance-distribution
+KL; it is not halved by the fixed reactance component.
+
 ### 6. Replot saved results for the paper
 
 ```bash
