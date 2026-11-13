@@ -115,6 +115,30 @@ after all network files exist does it run GridFM Datakit for each case's nominal
 and `d50` YAML configurations. All paths and generation parameters are defined at
 the beginning of the script; it takes no command-line arguments.
 
+To generate matched nominal/aged data for seeds 1–4 across all four networks,
+run the multi-seed pipeline from `src`:
+
+```bash
+./run_aging_and_data_generation_pipelines.sh
+```
+
+For every IEEE case and seed, the pipeline first creates the aged network and
+then generates a pair of Datakit datasets with identical seeds and perturbation
+settings. The nominal member uses `caseN_original` for both the network and its
+PF solutions, while the aged member uses
+`caseN_aged_seedS_k2p5_s40_d50_a60_logr`. Outputs follow this layout:
+
+```text
+datakit_out/caseN/seedS/caseN_original/
+datakit_out/caseN/seedS/caseN_aged_seedS_k2p5_s40_d50_a60_logr/
+```
+
+The pipeline creates 16 matched pairs (32 datasets): cases 14, 30, 57, and 118
+for seeds 1, 2, 3, and 4. It builds temporary YAML configurations without
+modifying the checked-in seed-0 templates. Because those templates specify
+`overwrite: true`, rerunning the pipeline replaces existing outputs for the
+same case and seed, including previously generated aged datasets.
+
 Dataset size, random seed, perturbations, solver settings, and output directories are
 controlled by the corresponding YAML files. For the seed-0 examples, set
 `settings.seed: 0` and `settings.data_dir: "./datakit_out/case118/seed0"` in both
