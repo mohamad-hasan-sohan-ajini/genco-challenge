@@ -73,7 +73,7 @@ MISMATCHED = "Mismatched"
 # Keep these condition colours stable across all figures.
 CONDITION_COLORS = {
     MATCHED_NOMINAL: "green",
-    MATCHED_AGED: "yellow",
+    MATCHED_AGED: "orange",
     MISMATCHED: "red",
 }
 
