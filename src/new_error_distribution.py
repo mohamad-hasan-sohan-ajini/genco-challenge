@@ -334,6 +334,25 @@ def save_numpy_errors(table, condition, output_dir):
         print(f"Saved {path}")
 
 
+def place_top_legend(axis, renderer):
+    """Choose the top corner with the least overlap with the plotted paths."""
+    paths = [
+        artist.get_path().transformed(artist.get_transform())
+        for artist in (*axis.patches, *axis.lines)
+    ]
+    scores = {}
+    for location in ("upper right", "upper left"):
+        legend = axis.legend(loc=location, fontsize=7)
+        bounds = legend.get_window_extent(renderer)
+        scores[location] = sum(
+            bounds.count_contains(path.vertices)
+            + int(path.intersects_bbox(bounds, filled=False))
+            for path in paths
+        )
+        legend.remove()
+    axis.legend(loc=min(scores, key=scores.get), fontsize=7)
+
+
 def plot_error_distributions(tables, output_path):
     """Save a four-panel signed-error histogram and return its statistics."""
     figure, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
@@ -377,8 +396,13 @@ def plot_error_distributions(tables, output_path):
         axis.set_xlabel(f"{variable} prediction error ({unit})")
         axis.set_ylabel("Fraction of observations")
         axis.grid(alpha=0.2)
-        axis.legend(fontsize=7)
+        axis.legend(loc="upper right", fontsize=7)
 
+    # Resolve constrained layout before comparing legend boxes with the curves.
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    for axis in axes.flat:
+        place_top_legend(axis, renderer)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(figure)
