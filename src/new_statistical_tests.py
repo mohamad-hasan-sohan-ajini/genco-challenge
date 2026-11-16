@@ -12,22 +12,19 @@ Outputs: src/results/new_statistical_tests/caseN/
 
 Skewness about zero is E[e**3] / E[e**2]**1.5, without centering errors.
 It is calculated separately for all three conditions and all four variables.
-Wasserstein-1 distances compare each matched-aged seed with every mismatched
-seed, including equal seeds (5 x 5 = 25 pairs for seeds 0-4). Reverse duplicates
-are omitted because the distance is symmetric. Variables remain in physical
+Wasserstein-1 distances compare matched-aged and mismatched errors from the
+same seed only (5 pairs for seeds 0-4). Variables remain in physical
 units: Vm in p.u., Va in degrees, P in MW, Q in MVAr.
 
 The summary gives equally weighted means and sample standard deviations
-(ddof=1) over seed skewness values or over all seed-pair distances. It includes
-numeric mean/std columns and a formatted mean +/- std column. These are
-descriptive statistics; pairs sharing seeds are not independent replicates.
+(ddof=1) over seed skewness values or over the same-seed distances. It includes
+separate numeric mean and std columns.
 Non-finite errors are excluded and their counts recorded in skewness_by_seed.
 All-zero errors have undefined skewness (NaN); undefined metric values are
 counted and excluded from summaries. A single defined value has undefined std.
 """
 
 import argparse
-from itertools import product
 from pathlib import Path
 import re
 
@@ -117,7 +114,6 @@ def summarize(case, variable, unit, metric, condition, values):
         "n_undefined": values.size - finite.size,
         "mean": mean,
         "std": std,
-        "mean_plus_minus_std": f"{mean:.8g} +/- {std:.8g}",
     }
 
 
@@ -150,18 +146,18 @@ def calculate_statistics(case, seed_directories):
             ))
 
         distances = []
-        for aged_seed, mismatched_seed in product(seeds, repeat=2):
+        for seed in seeds:
             distance = float(wasserstein_distance(
-                arrays["matched_aged", aged_seed],
-                arrays["mismatched_aged_pf_nominal_impedance", mismatched_seed],
+                arrays["matched_aged", seed],
+                arrays["mismatched_aged_pf_nominal_impedance", seed],
             ))
             distances.append(distance)
             distance_rows.append({
                 "case": case,
                 "variable": variable,
                 "unit": unit,
-                "matched_aged_seed": aged_seed,
-                "mismatched_seed": mismatched_seed,
+                "matched_aged_seed": seed,
+                "mismatched_seed": seed,
                 "wasserstein_1": distance,
             })
         summary_rows.append(summarize(
@@ -181,7 +177,7 @@ def main(argv=None):
     output_dir = PROJECT_DIR / "results" / "new_statistical_tests" / f"case{options.case}"
     seed_directories = discover_seed_directories(input_dir)
     print(f"IEEE-{options.case}: seeds {list(seed_directories)}")
-    print(f"Wasserstein-1: {len(seed_directories)**2} seed pairs per variable")
+    print(f"Wasserstein-1: {len(seed_directories)} same-seed pairs per variable")
     skewness, distances, summary = calculate_statistics(options.case, seed_directories)
     output_dir.mkdir(parents=True, exist_ok=True)
     for filename, table in (
