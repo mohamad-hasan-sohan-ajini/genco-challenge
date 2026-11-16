@@ -21,7 +21,7 @@ PF distributions reuse available baseline Parquets from new_error_distribution
 and evaluate aged PF using the final resistance-only checkpoint matching each
 TensorBoard run ID. Five distributions are saved per seed: the three previous
 plots, nominal versus estimated resistance on aged PF, and all four conditions
-together. Colors: nominal green, aged orange, mismatched red, estimated blue.
+together. Colors: nominal green, aged yellow, mismatched red, estimated blue.
 Legends choose the upper-left or upper-right corner. A manifest records the
 checkpoint path and SHA256. --skip-error-distributions retains the log-only
 workflow. Every eligible scenario is evaluated, with no sample cap. Processing
@@ -62,7 +62,7 @@ METRICS = {
     "epoch/impedance_mismatch_mae": ("resistance_mae", "Resistance mismatch MAE (p.u.)"),
     "epoch/impedance_mismatch_rmse": ("resistance_rmse", "Resistance mismatch RMSE (p.u.)"),
 }
-ESTIMATED_RESISTANCE = "Aged PF + estimated resistance (nominal reactance)"
+ESTIMATED_RESISTANCE = "Estimated Resistance"
 
 
 def parse_args(argv=None):

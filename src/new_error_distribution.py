@@ -65,14 +65,14 @@ from error_evaluation import (
 from aged_impedance_estimation import read_matpower_branch_rows
 
 
-MATCHED_NOMINAL = "Matched nominal (nominal PF + nominal impedance)"
-MATCHED_AGED = "Matched aged (aged PF + aged impedance)"
-MISMATCHED = "Mismatched (aged PF + nominal impedance)"
+MATCHED_NOMINAL = "Matched nominal"
+MATCHED_AGED = "Matched aged"
+MISMATCHED = "Mismatched"
 
 # Keep these condition colours stable across all figures.
 CONDITION_COLORS = {
     MATCHED_NOMINAL: "green",
-    MATCHED_AGED: "orange",
+    MATCHED_AGED: "yellow",
     MISMATCHED: "red",
 }
 
