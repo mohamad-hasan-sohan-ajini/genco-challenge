@@ -15,6 +15,7 @@ Inputs:
 
 Outputs are kept in a case/seed-specific directory below
 ``src/results/new_error_distribution`` and have condition-specific filenames.
+PDF filenames start with caseN- (for example, case57-).
 Each condition also exports one numeric .npy error array per variable (Vm, Va,
 P, Q). Errors are prediction minus actual in p.u., degrees, MW, and MVAr,
 respectively. Arrays include all errors in table row order, without histogram
@@ -460,12 +461,12 @@ def main(argv=None):
 
     matched_statistics = plot_error_distributions(
         {MATCHED_NOMINAL: nominal_errors, MATCHED_AGED: aged_errors},
-        output_dir / "matched_nominal_and_aged_prediction_error_distribution.pdf",
+        output_dir / f"case{options.case}-matched_nominal_and_aged_prediction_error_distribution.pdf",
     )
     mismatched_statistics = plot_error_distributions(
         {MISMATCHED: mismatched_errors},
         output_dir
-        / "mismatched_aged_pf_nominal_impedance_prediction_error_distribution.pdf",
+        / f"case{options.case}-mismatched_aged_pf_nominal_impedance_prediction_error_distribution.pdf",
     )
     plot_error_distributions(
         {
@@ -473,7 +474,7 @@ def main(argv=None):
             MATCHED_AGED: aged_errors,
             MISMATCHED: mismatched_errors,
         },
-        output_dir / "matched_and_mismatched_prediction_error_distribution.pdf",
+        output_dir / f"case{options.case}-matched_and_mismatched_prediction_error_distribution.pdf",
     )
     matched_statistics.to_csv(
         output_dir / "matched_nominal_and_aged_error_statistics.csv", index=False
