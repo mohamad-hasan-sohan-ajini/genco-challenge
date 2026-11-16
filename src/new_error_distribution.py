@@ -353,8 +353,10 @@ def place_top_legend(axis, renderer):
     axis.legend(loc=min(scores, key=scores.get), fontsize=7)
 
 
-def plot_error_distributions(tables, output_path):
+def plot_error_distributions(tables, output_path, *, colors=None):
     """Save a four-panel signed-error histogram and return its statistics."""
+    if colors is None:
+        colors = CONDITION_COLORS
     figure, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
     statistics = []
     for axis, (variable, unit) in zip(axes.flat, VARIABLES):
@@ -376,8 +378,13 @@ def plot_error_distributions(tables, output_path):
                 }
             )
 
-        lower = min(np.quantile(values, 0.005) for values in errors.values())
-        upper = max(np.quantile(values, 0.995) for values in errors.values())
+        if any(values.size < 3 for values in errors.values()):
+            # With one or two errors, percentile trimming can exclude every point.
+            lower = min(values.min() for values in errors.values())
+            upper = max(values.max() for values in errors.values())
+        else:
+            lower = min(np.quantile(values, 0.005) for values in errors.values())
+            upper = max(np.quantile(values, 0.995) for values in errors.values())
         if lower == upper:
             lower, upper = lower - 0.5, upper + 0.5
         bins = np.linspace(lower, upper, 101)
@@ -388,7 +395,7 @@ def plot_error_distributions(tables, output_path):
             axis.stairs(
                 counts / counts.sum(),
                 bins,
-                color=CONDITION_COLORS[label],
+                color=colors[label],
                 label=label,
                 linewidth=1.5,
             )
