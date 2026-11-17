@@ -540,3 +540,10 @@ as `reactance_mismatch_rmse_seeds0-4_replot.pdf` and
 `resistance_mismatch_rmse_seeds0-4_replot.pdf` when all five seeds are present;
 otherwise their filenames list the included seeds. Legacy IEEE-118 logs under
 `src/tb/seedXX/` are also supported.
+
+### Joint logarithmic R/X ageing and estimation
+
+For the isolated R+X experiment, including seed-0 data generation, joint
+estimation, deployment plots, and statistical analysis, see
+[README_RX.md](README_RX.md). Its scripts default to seed 0 and support
+`--all-seeds` for seeds 0–4.
