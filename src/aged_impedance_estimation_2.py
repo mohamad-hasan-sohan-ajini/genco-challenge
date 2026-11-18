@@ -85,17 +85,16 @@ AGING_MAX_RESISTANCE_DEGRADATION = 0.5
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def experiment_paths(seed, case, ageing):
+def experiment_paths(seed, case, ageing, *, data_root=None, results_dir=None, tb_dir=None):
     """Resolve the current Datakit directory layout for one experiment."""
-    root = PROJECT_DIR / "datakit_out" / f"case{case}" / f"seed{seed}"
+    root = (Path(data_root) if data_root is not None else PROJECT_DIR / "datakit_out") / f"case{case}" / f"seed{seed}"
     datasets = {
         f"case{case}_aged": root / ageing,
     }
     return (
         datasets,
-        PROJECT_DIR / "results" / f"case{case}" / f"seed{seed}" / ageing,
-        PROJECT_DIR
-        / "tb"
+        (Path(results_dir) if results_dir is not None else PROJECT_DIR / "results") / f"case{case}" / f"seed{seed}" / ageing,
+        (Path(tb_dir) if tb_dir is not None else PROJECT_DIR / "tb")
         / f"case{case}"
         / f"seed{seed}"
         / ageing.removeprefix(f"case{case}_aged_seed{seed}_"),
@@ -176,6 +175,10 @@ def parse_args(argv=None, *, resistance_only=False):
         else __doc__
     )
     parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--data-root", type=Path, default=PROJECT_DIR / "datakit_out")
+    parser.add_argument("--grid-dir", type=Path, default=PROJECT_DIR / "grids")
+    parser.add_argument("--results-dir", type=Path, default=PROJECT_DIR / "results")
+    parser.add_argument("--tb-dir", type=Path, default=PROJECT_DIR / "tb")
     parser.add_argument(
         "--case",
         type=int,
@@ -397,7 +400,10 @@ def main(argv=None, *, resistance_only=False):
     epochs = options.epochs
     kl_weight = options.kl_weight
     kl_enabled = kl_weight > 0
-    DATASET_ROOTS, OUTPUT_DIR, tb_root = experiment_paths(SEED, CASE, AGEING)
+    DATASET_ROOTS, OUTPUT_DIR, tb_root = experiment_paths(
+        SEED, CASE, AGEING, data_root=options.data_root,
+        results_dir=options.results_dir, tb_dir=options.tb_dir,
+    )
     estimation_target = "resistance" if resistance_only else "impedance"
     objective_name = "kl_physics_informed" if kl_enabled else "pf_only"
     output_parent = OUTPUT_DIR / objective_name
@@ -409,7 +415,7 @@ def main(argv=None, *, resistance_only=False):
         for table in ("bus_data.parquet", "gen_data.parquet", "branch_data.parquet"):
             if not (root / "raw" / table).exists():
                 raise FileNotFoundError(f"{name}: missing {root / 'raw' / table}")
-    original_case_path = PROJECT_DIR / "grids" / f"case{CASE}_original.m"
+    original_case_path = options.grid_dir / f"case{CASE}_original.m"
     if not original_case_path.is_file():
         raise FileNotFoundError(original_case_path)
     OUTPUT_DIR, RUN_ID = create_unique_run_directory(output_parent)
@@ -434,6 +440,7 @@ def main(argv=None, *, resistance_only=False):
         json.dumps(
             {
                 "case": CASE,
+                "epochs": epochs,
                 "seed": SEED,
                 "ageing": AGEING,
                 "run_id": RUN_ID,
@@ -985,6 +992,7 @@ def main(argv=None, *, resistance_only=False):
     torch.save(
         {
             "case": CASE,
+            "epochs": epochs,
             "seed": SEED,
             "ageing": AGEING,
             "run_id": RUN_ID,

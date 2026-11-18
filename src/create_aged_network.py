@@ -5,7 +5,8 @@ and bus-to-generator edges describe generator attachments, not line
 impedances; their source data in mpc.gen are never modified here.
 Transformer branches and out-of-service branches retain their parameters.
 Every eligible line receives a right-truncated Weibull age and a logarithmic
-age-dependent degradation multiplier for resistance. Reactance is unchanged.
+age-dependent degradation multiplier for resistance. Pass --ageing-mode rx to
+apply the same line-age multiplier to both resistance and reactance.
 """
 
 import argparse
@@ -76,6 +77,11 @@ def parse_args():
         help="Random seed for sampling line ages (default: 0)",
     )
     parser.add_argument(
+        "--ageing-mode", choices=("r", "rx"), default="r",
+        help="Age resistance only (default), or both R and X with the same sampled line age",
+    )
+    parser.add_argument("--source", type=Path, help="Optional local nominal MATPOWER source")
+    parser.add_argument(
         "--output",
         type=Path,
         help="Base output filename (default: grids/case<case>_aged.m); seed, k, s, degradation percent d, maximum age a and logarithmic-resistance model tag logr are appended",
@@ -118,7 +124,7 @@ def resistance_degradation(age, max_age, max_degradation):
 
 
 def parameterized_output_path(
-    output, seed, shape, scale, max_degradation=0.5, max_age=60.0,
+    output, seed, shape, scale, max_degradation=0.5, max_age=60.0, ageing_mode="r",
 ):
     """Append seed/k/s/d/a/logr tags; d is a percentage, s and a are years.
 
@@ -142,7 +148,7 @@ def parameterized_output_path(
     return output.with_name(
         f"{output.stem}_seed{tag(seed)}_k{tag(shape)}_s{tag(scale)}"
         f"_d{tag(degradation_percent)}_a{tag(max_age)}"
-        f"_logr{output.suffix}"
+        f"_log{'rx' if ageing_mode == 'rx' else 'r'}{output.suffix}"
     )
 
 
@@ -218,9 +224,10 @@ def main():
     output_path = parameterized_output_path(
         args.output, args.seed, args.weibull_shape, args.weibull_scale,
         args.max_degradation, args.max_age,
+        args.ageing_mode,
     )
 
-    source = Path(get_pglib_source_path(source_network_name))
+    source = args.source or Path(get_pglib_source_path(source_network_name))
 
     original = source.read_text()
     # Only this table maps to AGED_EDGE_TYPE. Do not edit mpc.bus or mpc.gen.
@@ -268,10 +275,17 @@ def main():
         )
         multiplier = 1.0 + degradation
         affected_resistance = float(f"{original_resistance * multiplier:.16g}")
-        # Replace only R, preserving X and every other MATPOWER field verbatim.
-        token = tokens[2]
-        updated = f"{affected_resistance:.16g}"
-        data = data[: token.start()] + updated + data[token.end() :]
+        affected_reactance = (
+            float(f"{original_reactance * multiplier:.16g}")
+            if args.ageing_mode == "rx" else original_reactance
+        )
+        # Replace tokens from right to left so offsets remain valid.
+        replacements = [(2, affected_resistance)]
+        if args.ageing_mode == "rx":
+            replacements.append((3, affected_reactance))
+        for column, value in reversed(replacements):
+            token = tokens[column]
+            data = data[:token.start()] + f"{value:.16g}" + data[token.end():]
         lines[idx] = data + (marker + comment if marker else "")
         affected_lines.append(
             {
@@ -284,8 +298,8 @@ def main():
                 "affected_resistance": affected_resistance,
                 "resistance_multiplier": multiplier,
                 "original_reactance": original_reactance,
-                "affected_reactance": original_reactance,
-                "reactance_multiplier": 1.0,
+                "affected_reactance": affected_reactance,
+                "reactance_multiplier": multiplier if args.ageing_mode == "rx" else 1.0,
             }
         )
 
@@ -308,6 +322,7 @@ def main():
     changes = {
         "case": args.case,
         "source_network": source_network_name,
+        "source_path": str(source.resolve()),
         "network_file": output_path.name,
         "original_network_file": original_output.name,
         "affected_edge_type": list(AGED_EDGE_TYPE),
@@ -317,8 +332,13 @@ def main():
         "weibull_scale_years": args.weibull_scale,
         "age_range_years": [0.0, args.max_age],
         "max_degradation": args.max_degradation,
-        "degradation_model": "normalized_logarithmic_resistance_only",
-        "modified_branch_parameters": ["resistance"],
+        "degradation_model": (
+            "normalized_logarithmic_resistance_reactance" if args.ageing_mode == "rx"
+            else "normalized_logarithmic_resistance_only"
+        ),
+        "modified_branch_parameters": (
+            ["resistance", "reactance"] if args.ageing_mode == "rx" else ["resistance"]
+        ),
         "affected_lines": affected_lines,
     }
     age_plot_path = output_path.with_name(f"{output_path.stem}_age_distribution.png")
