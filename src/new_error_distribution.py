@@ -323,10 +323,13 @@ def place_top_legend(axis, renderer):
     for location in ("upper right", "upper left"):
         legend = axis.legend(loc=location, fontsize=7)
         bounds = legend.get_window_extent(renderer)
-        scores[location] = sum(
-            bounds.count_contains(path.vertices)
-            + int(path.intersects_bbox(bounds, filled=False))
-            for path in paths
+        scores[location] = (
+            any(bounds.overlaps(child.get_window_extent(renderer)) for child in axis.child_axes),
+            sum(
+                bounds.count_contains(path.vertices)
+                + int(path.intersects_bbox(bounds, filled=False))
+                for path in paths
+            ),
         )
         legend.remove()
     axis.legend(loc=min(scores, key=scores.get), fontsize=7)
@@ -334,26 +337,35 @@ def place_top_legend(axis, renderer):
 
 def plot_error_distributions(tables, output_path, *, colors=None):
     """Save a four-panel signed-error histogram and return its statistics."""
+    errors_by_variable = {}
+    for variable, _ in VARIABLES:
+        errors = errors_by_variable[variable] = {}
+        for label, table in tables.items():
+            rows = table.loc[table["variable"] == variable]
+            finite = np.isfinite(rows["actual"]) & np.isfinite(rows["error"])
+            errors[label] = rows.loc[finite, "error"].to_numpy(dtype=float)
+    return plot_error_arrays(errors_by_variable, output_path, colors=colors)
+
+
+def plot_error_arrays(errors_by_variable, output_path, *, colors=None, decorate_axis=None):
+    """Plot finite error arrays using shared bins for each variable."""
     if colors is None:
         colors = CONDITION_COLORS
     figure, axes = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
     statistics = []
     for axis, (variable, unit) in zip(axes.flat, VARIABLES):
-        errors = {}
-        for label, table in tables.items():
-            rows = table.loc[table["variable"] == variable]
-            finite = np.isfinite(rows["actual"]) & np.isfinite(rows["error"])
-            errors[label] = rows.loc[finite, "error"].to_numpy(dtype=float)
-            if errors[label].size == 0:
+        errors = errors_by_variable[variable]
+        for label, values in errors.items():
+            if values.size == 0:
                 raise ValueError(f"No finite {variable} values for {label}")
             statistics.append(
                 {
                     "Variable": variable,
                     "Condition": label,
                     "Unit": unit,
-                    "Count": errors[label].size,
-                    "Mean": errors[label].mean(),
-                    "Std": errors[label].std(ddof=0),
+                    "Count": values.size,
+                    "Mean": values.mean(),
+                    "Std": values.std(ddof=0),
                 }
             )
 
@@ -383,6 +395,8 @@ def plot_error_distributions(tables, output_path, *, colors=None):
         axis.set_ylabel("Fraction of observations")
         axis.grid(alpha=0.2)
         axis.legend(loc="upper right", fontsize=7)
+        if decorate_axis is not None:
+            decorate_axis(axis, variable)
 
     # Resolve constrained layout before comparing legend boxes with the curves.
     figure.canvas.draw()
