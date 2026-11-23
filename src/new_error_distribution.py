@@ -10,21 +10,20 @@ from the unmodified nominal MATPOWER network.
 A third figure overlays all three conditions using shared histogram bins.
 
 Inputs:
-    src/datakit_out/caseN/seedS/caseN_original/
-    src/datakit_out/caseN/seedS/caseN_aged_seedS_k2p5_s40_d50_a60_logr/
+    src/datakit_out_new/caseN/seedS/caseN_original/
+    src/datakit_out_new/caseN/seedS/caseN_aged_seedS_k2p5_s40_d50_a60_logr/
 
 Outputs are kept in a case/seed-specific directory below
-``src/results/new_error_distribution`` and have condition-specific filenames.
-PDF filenames start with caseN- (for example, case57-).
+``src/results_new/new_error_distribution`` and have condition-specific filenames.
+PDFs and reports start with caseN-seedS-. Defaults to all cases and seed 0.
 Each condition also exports one numeric .npy error array per variable (Vm, Va,
 P, Q). Errors are prediction minus actual in p.u., degrees, MW, and MVAr,
 respectively. Arrays include all errors in table row order, without histogram
 clipping or filtering of non-finite values. For example:
-    errors = np.load("src/results/new_error_distribution/case57/seed0/"
+    errors = np.load("src/results_new/new_error_distribution/case57/seed0/"
                      "matched_nominal_Vm_errors.npy", allow_pickle=False)
 """
 
-import argparse
 from pathlib import Path
 
 import matplotlib
@@ -56,14 +55,13 @@ from gridfm_graphkit.io.param_handler import get_task_transforms
 from error_evaluation import (
     DEFAULT_DATA_CACHE,
     DEVICE,
-    PROJECT_DIR,
     HuggingFaceModel,
     _evaluate_pair,
-    _validate_local_dataset_root,
     load_data_source,
     load_huggingface_model,
 )
 from aged_impedance_estimation import read_matpower_branch_rows
+import resistance_analysis as resistance
 
 
 MATCHED_NOMINAL = "Matched nominal"
@@ -83,38 +81,18 @@ VARIABLES = (("Vm", "p.u."), ("Va", "degrees"), ("P", "MW"), ("Q", "MVAr"))
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--case",
-        type=int,
-        choices=(14, 30, 57, 118),
-        required=True,
-        help="IEEE bus system",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        required=True,
-        help="Dataset seed; the pretrained model always uses training seed 0",
-    )
-    options = parser.parse_args(argv)
-    if not 0 <= options.seed < 2**32:
-        parser.error("--seed must be between 0 and 2**32 - 1")
-    return options
+    parser = resistance.parser(__doc__, single_seed_option=True)
+    parser.add_argument("--recompute", action="store_true", help="Re-evaluate complete baselines")
+    return resistance.select_cases_and_seeds(parser.parse_args(argv))
 
 
 def experiment_paths(case, seed):
     """Return the two input datasets and the isolated output directory."""
-    data_root = PROJECT_DIR / "datakit_out" / f"case{case}" / f"seed{seed}"
-    aged_name = f"case{case}_aged_seed{seed}_k2p5_s40_d50_a60_logr"
+    data_root = resistance.DATA / f"case{case}" / f"seed{seed}"
     return (
         data_root / f"case{case}_original",
-        data_root / aged_name,
-        PROJECT_DIR
-        / "results"
-        / "new_error_distribution"
-        / f"case{case}"
-        / f"seed{seed}",
+        data_root / resistance.ageing_name(case, seed),
+        resistance.BASELINES / f"case{case}" / f"seed{seed}",
     )
 
 
@@ -130,7 +108,7 @@ def model_spec(case):
 
 def nominal_admittance(case, normalizer):
     """Reconstruct normalized directed-edge Y from the nominal MATPOWER case."""
-    case_path = PROJECT_DIR / "grids" / f"case{case}_original.m"
+    case_path = resistance.GRIDS / f"case{case}_original.m"
     if not case_path.is_file():
         raise FileNotFoundError(f"Nominal MATPOWER network not found: {case_path}")
     rows = read_matpower_branch_rows(case_path)
@@ -419,74 +397,26 @@ def plot_error_distributions(tables, output_path, *, colors=None):
 
 
 def main(argv=None):
+    from rx_common import evaluate_baselines, plot_groups, write_manifest
+
     options = parse_args(argv)
-    nominal_root, aged_root, output_dir = experiment_paths(options.case, options.seed)
-    nominal_root = _validate_local_dataset_root(nominal_root)
-    aged_root = _validate_local_dataset_root(aged_root)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    spec = model_spec(options.case)
-    bundle = load_huggingface_model(spec)
-    nominal_errors = _evaluate_pair(
-        (nominal_root, spec),
-        MATCHED_NOMINAL,
-        max_samples=None,
-        data_cache_dir=DEFAULT_DATA_CACHE,
-        model_bundle=bundle,
-    )
-    aged_errors = _evaluate_pair(
-        (aged_root, spec),
-        MATCHED_AGED,
-        max_samples=None,
-        data_cache_dir=DEFAULT_DATA_CACHE,
-        model_bundle=bundle,
-    )
-    mismatched_errors = evaluate_mismatched(
-        aged_root,
-        nominal_admittance(options.case, bundle[1]),
-        bundle,
-    )
-
-    error_tables = {
-        "matched_nominal_prediction_errors.parquet": nominal_errors,
-        "matched_aged_prediction_errors.parquet": aged_errors,
-        "mismatched_aged_pf_nominal_impedance_prediction_errors.parquet": mismatched_errors,
-    }
-    for filename, table in error_tables.items():
-        path = output_dir / filename
-        table.to_parquet(path, index=False)
-        print(f"Saved {path}")
-        condition = path.stem.removesuffix("_prediction_errors")
-        save_numpy_errors(table, condition, output_dir)
-
-    matched_statistics = plot_error_distributions(
-        {MATCHED_NOMINAL: nominal_errors, MATCHED_AGED: aged_errors},
-        output_dir / f"case{options.case}-matched_nominal_and_aged_prediction_error_distribution.pdf",
-    )
-    mismatched_statistics = plot_error_distributions(
-        {MISMATCHED: mismatched_errors},
-        output_dir
-        / f"case{options.case}-mismatched_aged_pf_nominal_impedance_prediction_error_distribution.pdf",
-    )
-    plot_error_distributions(
-        {
-            MATCHED_NOMINAL: nominal_errors,
-            MATCHED_AGED: aged_errors,
-            MISMATCHED: mismatched_errors,
-        },
-        output_dir / f"case{options.case}-matched_and_mismatched_prediction_error_distribution.pdf",
-    )
-    matched_statistics.to_csv(
-        output_dir / "matched_nominal_and_aged_error_statistics.csv", index=False
-    )
-    mismatched_statistics.to_csv(
-        output_dir / "mismatched_aged_pf_nominal_impedance_error_statistics.csv",
-        index=False,
-    )
-    print(
-        "Saved three PDFs, three error tables, twelve NumPy error arrays, "
-        f"and two statistics CSVs to {output_dir}"
-    )
+    models = {}
+    for seed in options.seeds:
+        for case in options.case:
+            if case not in models:
+                models[case] = load_huggingface_model(model_spec(case))
+            nominal, aged, directory = experiment_paths(case, seed)
+            tables = evaluate_baselines(
+                case, models[case], nominal, aged, resistance.GRIDS, directory,
+                recompute=options.recompute,
+            )
+            plot_groups(tables, directory, case, seed)
+            write_manifest(
+                directory / f"case{case}-seed{seed}-baseline_manifest.json",
+                case=case, seed=seed, ageing=aged.name, nominal_dataset=str(nominal),
+                aged_dataset=str(aged), all_eligible_scenarios=True,
+            )
+            print(f"Saved baseline analysis to {directory}")
 
 
 if __name__ == "__main__":

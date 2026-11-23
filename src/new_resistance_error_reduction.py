@@ -1,48 +1,17 @@
-"""Report resistance-only estimation improvements and plot TensorBoard curves.
+"""Report resistance recovery, learning curves, and deployed PF errors.
 
-Run all IEEE cases and seeds 0-4 from any working directory:
-    venv/bin/python src/new_resistance_error_reduction.py
-Select a subset:
-    venv/bin/python src/new_resistance_error_reduction.py --case 57 --seeds 0 1
+Defaults to all IEEE cases and seed 0; --all-seeds selects seeds 0–4.
+Reads the latest run per case/seed from tb_new and its checkpoint from
+results_new. Measures recovery against the aged MATPOWER network and keeps
+TensorBoard diagnostics in separate logged_* columns.
 
-Reads the latest run in each exact TensorBoard experiment directory:
-    src/tb/caseN/seedS/AGEING_TAG/OBJECTIVE/resistance_only/RUN/
-Defaults: AGEING_TAG=k2p5_s40_d50_a60_logr, OBJECTIVE=pf_only.
-Joint R/X runs and other objectives are never mixed into the selected runs.
-
-Outputs below src/results/new_resistance_error_reduction/AGEING_TAG/OBJECTIVE/:
-    caseN-...-resistance_error_reduction_seedsS-....csv
-    caseN/caseN-*_seedsS-....pdf (one plot per requested metric)
-    caseN/caseN-tensorboard_curves_seedsS-....csv (all plotted scalar points)
-    caseN/seedS/RUN/caseN-seedS-*_prediction_error_distribution.pdf
-    caseN/seedS/RUN/caseN-seedS-aged_pf_estimated_resistance_* (Parquet/NumPy errors)
-
-PF distributions reuse available baseline Parquets from new_error_distribution
-and evaluate aged PF using the final resistance-only checkpoint matching each
-TensorBoard run ID. Five distributions are saved per seed: the three previous
-plots, nominal versus estimated resistance on aged PF, and all four conditions
-together. Colors: nominal green, aged orange, mismatched red, estimated blue.
-Legends choose the upper-left or upper-right corner. A manifest records the
-checkpoint path and SHA256. --skip-error-distributions retains the log-only
-workflow. Every eligible scenario is evaluated, with no sample cap. Processing
-finishes all selected cases for seed 0 before seed 1, and so forth.
-
-The main CSV has one row per seed and a mean row at the end of each case.
-Initial means epoch 0; final means the last logged epoch, not the best epoch.
-Reduction (%) = 100 * (initial - final) / initial. Zero initial values give
-NaN percentages. Mean rows average the individual seed values, including
-the per-seed percentage reductions, with equal weight and excluding NaNs.
-
-Resistance MAE and RMSE are in p.u.; power-flow MSE is the normalized training
-loss. Only R is estimated in these runs, so the impedance-mismatch tags describe
-resistance errors. Curves use every logged point without smoothing. Resumed
-runs keep the most recent scalar at each step. All three tags must have the
-same epochs, including epoch 0 and at least one later epoch.
+Outputs under results_new/new_resistance_error_reduction/AGEING_TAG/OBJECTIVE:
+seed-labelled CSVs and curves, then per-case/seed/run parity plots, PF error
+distributions, Parquet/NumPy exports and a checkpoint provenance manifest.
+--skip-error-distributions writes the recovery CSV and curves without inference.
 """
 
-import argparse
 import hashlib
-import json
 from pathlib import Path
 
 import matplotlib
@@ -54,48 +23,45 @@ import numpy as np
 import pandas as pd
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
+import resistance_analysis as resistance
 
-PROJECT_DIR = Path(__file__).resolve().parent
-CASES = (14, 30, 57, 118)
 METRICS = {
     "loss/power_flow_mse": ("power_flow_mse", "Power-flow MSE (normalized)"),
-    "epoch/impedance_mismatch_mae": ("resistance_mae", "Resistance mismatch MAE (p.u.)"),
-    "epoch/impedance_mismatch_rmse": ("resistance_rmse", "Resistance mismatch RMSE (p.u.)"),
+    "epoch/impedance_mismatch_mae": ("impedance_mismatch_mae", "Resistance mismatch MAE (p.u.)"),
+    "epoch/impedance_mismatch_rmse": ("impedance_mismatch_rmse", "Resistance mismatch RMSE (p.u.)"),
+    "epoch/resistance_mismatch_rmse": ("resistance_mismatch_rmse", "Resistance mismatch RMSE (p.u.)"),
+    "epoch/reactance_mismatch_rmse": ("reactance_mismatch_rmse", "Reactance mismatch RMSE (p.u.)"),
 }
 ESTIMATED_RESISTANCE = "Estimated Resistance"
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", type=int, nargs="+", choices=CASES, default=list(CASES))
-    parser.add_argument("--seeds", type=int, nargs="+", default=list(range(5)))
-    parser.add_argument("--ageing-tag", default="k2p5_s40_d50_a60_logr")
+    parser = resistance.parser(__doc__)
+    parser.add_argument("--ageing-tag", default=resistance.TAG)
     parser.add_argument("--objective", choices=("pf_only", "kl_physics_informed"), default="pf_only")
-    parser.add_argument("--log-dir", type=Path, default=PROJECT_DIR / "tb")
+    parser.add_argument("--log-dir", type=Path, default=resistance.TB)
+    parser.add_argument("--data-root", type=Path, default=resistance.DATA)
+    parser.add_argument("--grid-dir", type=Path, default=resistance.GRIDS)
     parser.add_argument(
-        "--checkpoint-dir", type=Path, default=PROJECT_DIR / "results",
+        "--checkpoint-dir", type=Path, default=resistance.RESULTS,
         help="Root containing caseN/seedS/AGEING_CASE/OBJECTIVE/resistance_only/RUN checkpoints",
     )
     parser.add_argument(
-        "--baseline-dir", type=Path, default=PROJECT_DIR / "results" / "new_error_distribution",
+        "--baseline-dir", type=Path, default=resistance.BASELINES,
         help="Reuse existing baseline prediction Parquets for the default ageing tag",
     )
     parser.add_argument(
         "--skip-error-distributions", action="store_true",
-        help="Generate only the TensorBoard report and training curves",
+        help="Generate recovery CSV and training curves without deployment inference",
     )
     parser.add_argument(
         "--output-dir", type=Path,
-        default=PROJECT_DIR / "results" / "new_resistance_error_reduction",
+        default=resistance.DEPLOYMENT,
     )
     options = parser.parse_args(argv)
-    if any(not 0 <= seed < 2**32 for seed in options.seeds):
-        parser.error("--seeds must be between 0 and 2**32 - 1")
     if Path(options.ageing_tag).name != options.ageing_tag or options.ageing_tag in {".", ".."}:
         parser.error("--ageing-tag must be a directory name, not a path")
-    options.case = sorted(set(options.case))
-    options.seeds = sorted(set(options.seeds))
-    return options
+    return resistance.select_cases_and_seeds(options)
 
 
 def load_run(log_root, case, seed, ageing_tag, objective):
@@ -141,47 +107,55 @@ def load_run(log_root, case, seed, ageing_tag, objective):
     return run_dir, curves
 
 
-def improvement_row(case, seed, run_dir, curves):
+def recovery_row(case, seed, checkpoint_info, curves, options):
+    from rx_common import recovery_components, recovery_metrics, reduction
+
+    path, checkpoint = checkpoint_info
+    components = recovery_components(
+        options.grid_dir, case, checkpoint["ageing"], checkpoint, fixed_reactance=True,
+    )
     reference = curves[next(iter(METRICS))]
     row = {
         "case": case, "seed": seed, "n_seeds": 1,
+        "eligible_lines": len(components["resistance"][0]),
         "initial_epoch": int(reference.iloc[0]["epoch"]),
         "final_epoch": int(reference.iloc[-1]["epoch"]),
+        **recovery_metrics(components),
     }
     for tag, (metric, _) in METRICS.items():
         initial = float(curves[tag].iloc[0]["value"])
         final = float(curves[tag].iloc[-1]["value"])
-        row[f"{metric}_initial"] = initial
-        row[f"{metric}_final"] = final
-        row[f"{metric}_reduction_pct"] = 100 * (1 - final / initial) if initial > 0 else np.nan
-    row["run_dir"] = str(run_dir)
+        row[f"logged_{metric}_initial"] = initial
+        row[f"logged_{metric}_final"] = final
+        row[f"logged_{metric}_reduction_pct"] = reduction(initial, final)
+    row["checkpoint"] = str(path)
     return row
 
 
 def case_mean_row(case, rows):
     """Average seed-level values, including reductions, rather than recomputing ratios."""
     table = pd.DataFrame(rows)
-    numeric_columns = [column for column in table if column not in {"case", "seed", "n_seeds", "run_dir"}]
+    numeric_columns = [column for column in table if column not in {"case", "seed", "n_seeds", "checkpoint"}]
     return {
         "case": case, "seed": "mean", "n_seeds": len(rows),
         **{column: table[column].mean() for column in numeric_columns},
-        "run_dir": "",
+        "checkpoint": "",
     }
 
 
 def plot_case(case, runs, output_dir, seed_label):
-    """Overlay seeds in three separate title-free PDFs, with legends at the top."""
+    """Overlay seeds in separate title-free PDFs, with legends at the top."""
     output_dir.mkdir(parents=True, exist_ok=True)
     raw_tables = []
     for tag, (metric, ylabel) in METRICS.items():
         figure, axis = plt.subplots(figsize=(6, 4), constrained_layout=True)
-        for seed, (run_dir, curves) in runs.items():
+        for seed, (_, curves) in runs.items():
             table = curves[tag]
             axis.plot(
                 table["epoch"], table["value"], color=f"C{seed % 10}",
                 linewidth=1.5, label=f"Seed {seed}",
             )
-            raw_tables.append(table.assign(case=case, seed=seed, tag=tag, run_dir=str(run_dir)))
+            raw_tables.append(table.assign(case=case, seed=seed, tag=tag))
         axis.set_xlabel("Epoch")
         axis.set_ylabel(ylabel)
         axis.grid(alpha=0.2)
@@ -218,6 +192,9 @@ def load_final_checkpoint(case, seed, run_dir, curves, options):
             raise ValueError(f"Checkpoint {key} does not match selected run: {path}")
     if bool(checkpoint.get("kl_enabled", False)) != (options.objective == "kl_physics_informed"):
         raise ValueError(f"Checkpoint objective differs from selected run: {path}")
+    last_epoch = int(curves["loss/power_flow_mse"].epoch.iloc[-1])
+    if "epochs" in checkpoint and checkpoint["epochs"] != last_epoch:
+        raise ValueError(f"Checkpoint is not from the final logged epoch: {path}")
     mask = checkpoint["learnable_line_mask"].bool()
     if not mask.any():
         raise ValueError(f"Checkpoint has no learnable lines: {path}")
@@ -307,6 +284,7 @@ def plot_deployment_errors(case, seed, run_dir, checkpoint_info, model_bundle, o
     """Reproduce baseline plots and compare the effect of deploying final estimated R."""
     import torch
     import new_error_distribution as distributions
+    import rx_common as analysis
 
     checkpoint_path, checkpoint = checkpoint_info
     _, normalizer, _ = model_bundle
@@ -314,7 +292,7 @@ def plot_deployment_errors(case, seed, run_dir, checkpoint_info, model_bundle, o
     expected_artifacts = {"repo_id": spec.repo_id, "run_dir": spec.subfolder}
     if any(checkpoint["model_artifacts"].get(key) != value for key, value in expected_artifacts.items()):
         raise ValueError("Estimator and PF evaluator use different pretrained GENCO models")
-    nominal_y = distributions.nominal_admittance(case, normalizer)
+    nominal_y = analysis.admittance(options.grid_dir / f"case{case}_original.m", normalizer)
     if not torch.allclose(nominal_y, checkpoint["initial_admittance_normalized"], rtol=1e-5, atol=1e-6):
         raise ValueError("Checkpoint nominal admittance differs from this network/normalizer")
     # Confirm the saved deployment inputs encode the saved final R, with X fixed.
@@ -328,86 +306,35 @@ def plot_deployment_errors(case, seed, run_dir, checkpoint_info, model_bundle, o
     if not torch.allclose(impedance.imag, checkpoint["initial_reactance_pu"][mask], rtol=1e-5, atol=1e-7):
         raise ValueError("Saved deployment inputs do not retain nominal reactance")
 
-    data_root = PROJECT_DIR / "datakit_out" / f"case{case}" / f"seed{seed}"
+    data_root = options.data_root / f"case{case}" / f"seed{seed}"
     nominal_root = data_root / f"case{case}_original"
-    aged_root = Path(checkpoint["dataset_roots"][f"case{case}_aged"]).expanduser()
-    if not aged_root.is_absolute():
-        aged_root = PROJECT_DIR / aged_root
+    aged_root = data_root / checkpoint["ageing"]
     cached_dir = options.baseline_dir / f"case{case}" / f"seed{seed}"
-    tables = {}
-    for condition, label, source in (
-        ("matched_nominal", distributions.MATCHED_NOMINAL, nominal_root),
-        ("matched_aged", distributions.MATCHED_AGED, aged_root),
-        ("mismatched_aged_pf_nominal_impedance", distributions.MISMATCHED, aged_root),
-    ):
-        cached_path = cached_dir / f"{condition}_prediction_errors.parquet"
-        can_reuse_baseline = (
-            options.ageing_tag == "k2p5_s40_d50_a60_logr"
-            and aged_root.resolve() == (data_root / checkpoint["ageing"]).resolve()
-        )
-        if can_reuse_baseline and cached_path.is_file():
-            table = pd.read_parquet(cached_path)
-            dataset = distributions.load_data_source(
-                source, normalizer,
-                stream_partitions=getattr(model_bundle[2].data, "stream_partitions", "auto"),
-                cache_dir=distributions.DEFAULT_DATA_CACHE,
-            )
-            eligible_indices = {
-                int(path.stem.removeprefix("data_index_"))
-                for path in Path(dataset.processed_dir).glob("data_index_*.pt")
-            }
-            can_reuse_baseline = bool(eligible_indices) and set(table["dataset_index"].unique()) == eligible_indices
-            if can_reuse_baseline:
-                print(f"Reusing complete baseline {cached_path} ({len(eligible_indices):,} scenarios)")
-            else:
-                print(f"Re-evaluating incomplete baseline {cached_path}")
-        else:
-            can_reuse_baseline = False
-        if can_reuse_baseline:
-            tables[label] = table
-            continue
-        if label == distributions.MISMATCHED:
-            table = distributions.evaluate_mismatched(
-                aged_root, nominal_y, model_bundle,
-            )
-        else:
-            table = distributions._evaluate_pair(
-                (source, spec), label, max_samples=None,
-                data_cache_dir=distributions.DEFAULT_DATA_CACHE, model_bundle=model_bundle,
-            )
-        tables[label] = table
-    estimated = evaluate_estimated_resistance(aged_root, checkpoint, model_bundle)
-    validate_aged_prediction_rows(tables[distributions.MATCHED_AGED], estimated)
-    validate_aged_prediction_rows(tables[distributions.MISMATCHED], estimated)
-    tables[ESTIMATED_RESISTANCE] = estimated
-    output_dir = output_dir / f"seed{seed}" / checkpoint["run_id"]
-    output_dir.mkdir(parents=True, exist_ok=True)
-    prefix = f"case{case}-seed{seed}"
-    estimated.to_parquet(output_dir / f"{prefix}-aged_pf_estimated_resistance_prediction_errors.parquet", index=False)
-    distributions.save_numpy_errors(estimated, f"{prefix}-aged_pf_estimated_resistance", output_dir)
-    colors = {**distributions.CONDITION_COLORS, ESTIMATED_RESISTANCE: "blue"}
-    groups = (
-        ("matched_nominal_and_aged", (distributions.MATCHED_NOMINAL, distributions.MATCHED_AGED)),
-        ("mismatched_aged_pf_nominal_impedance", (distributions.MISMATCHED,)),
-        ("matched_and_mismatched", tuple(tables)[:3]),
-        ("nominal_vs_estimated_resistance_aged_pf", (distributions.MISMATCHED, ESTIMATED_RESISTANCE)),
-        ("all_conditions_with_estimated_resistance", tuple(tables)),
+    tables = analysis.evaluate_baselines(
+        case, model_bundle, nominal_root, aged_root, options.grid_dir, cached_dir,
+        recompute=options.ageing_tag != resistance.TAG, save=False,
     )
-    for name, labels in groups:
-        statistics = distributions.plot_error_distributions(
-            {label: tables[label] for label in labels},
-            output_dir / f"{prefix}-{name}_prediction_error_distribution.pdf", colors=colors,
-        )
-    statistics.to_csv(output_dir / f"{prefix}-pf_error_statistics.csv", index=False)
-    (output_dir / f"{prefix}-deployment_manifest.json").write_text(json.dumps({
-        "case": case, "seed": seed, "tensorboard_run": str(run_dir),
-        "checkpoint": str(checkpoint_path),
-        "checkpoint_sha256": hashlib.sha256(checkpoint_path.read_bytes()).hexdigest(),
-        "run_id": checkpoint["run_id"], "all_eligible_scenarios": True,
-        "reactance": "fixed at nominal", "model": expected_artifacts,
-        "aged_dataset": str(aged_root), "nominal_dataset": str(nominal_root),
-        "scenario_counts": {label: int(table["scenario_id"].nunique()) for label, table in tables.items()},
-    }, indent=2) + "\n")
+    estimated = evaluate_estimated_resistance(aged_root, checkpoint, model_bundle)
+    for condition in analysis.BASE_CONDITIONS[1:]:
+        validate_aged_prediction_rows(tables[condition], estimated)
+    estimated_condition = "aged_pf_estimated_resistance"
+    tables[estimated_condition] = estimated
+    output_dir = output_dir / f"seed{seed}" / checkpoint["run_id"]
+    prefix = f"case{case}-seed{seed}-"
+    analysis.save_errors(estimated, output_dir, estimated_condition, prefix)
+    analysis.plot_groups(tables, output_dir, case, seed, estimated=True, target="resistance")
+    components = analysis.recovery_components(
+        options.grid_dir, case, checkpoint["ageing"], checkpoint, fixed_reactance=True,
+    )
+    analysis.plot_recovery_parity(case, seed, components, output_dir)
+    analysis.write_manifest(
+        output_dir / f"{prefix}deployment_manifest.json",
+        case=case, seed=seed, run_id=checkpoint["run_id"], checkpoint=str(checkpoint_path),
+        tensorboard_run=str(run_dir), checkpoint_sha256=hashlib.sha256(checkpoint_path.read_bytes()).hexdigest(),
+        all_eligible_scenarios=True, estimation_target="resistance",
+        model=expected_artifacts, aged_dataset=str(aged_root), nominal_dataset=str(nominal_root),
+        scenario_counts={condition: int(table.scenario_id.nunique()) for condition, table in tables.items()},
+    )
 
 
 def main(argv=None):
@@ -421,10 +348,7 @@ def main(argv=None):
                 options.log_dir, case, seed, options.ageing_tag, options.objective
             )
             runs[case][seed] = (run_dir, curves)
-            if not options.skip_error_distributions:
-                checkpoints[case, seed] = load_final_checkpoint(
-                    case, seed, run_dir, curves, options,
-                )
+            checkpoints[case, seed] = load_final_checkpoint(case, seed, run_dir, curves, options)
             print(f"IEEE-{case}, seed {seed}: {run_dir}")
 
     output_dir = options.output_dir / options.ageing_tag / options.objective
@@ -434,8 +358,8 @@ def main(argv=None):
     rows = []
     for case, case_runs in runs.items():
         seed_rows = [
-            improvement_row(case, seed, run_dir, curves)
-            for seed, (run_dir, curves) in case_runs.items()
+            recovery_row(case, seed, checkpoints[case, seed], curves, options)
+            for seed, (_, curves) in case_runs.items()
         ]
         rows.extend(seed_rows)
         rows.append(case_mean_row(case, seed_rows))
@@ -445,7 +369,6 @@ def main(argv=None):
     path = output_dir / f"case{case_label}-resistance_error_reduction_seeds{seed_label}.csv"
     table.to_csv(path, index=False, na_rep="NaN")
     print(f"Saved {path}")
-    print(table.drop(columns="run_dir").to_string(index=False))
     if not options.skip_error_distributions:
         import new_error_distribution as distributions
 

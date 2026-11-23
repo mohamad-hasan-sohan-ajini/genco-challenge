@@ -499,6 +499,23 @@ Or run IEEE-14, 30, 57, and 118 across seeds 0–4. This batch script also uses
 In resistance-only mode, the physics term is the full resistance-distribution
 KL; it is not halved by the fixed reactance component.
 
+### Analyze the saved resistance-only runs
+
+From the repository root, run the baseline distributions, recovery and
+deployment analysis, and statistical summaries in order:
+
+```bash
+bash src/run_all_resistance_analysis.sh
+```
+
+The analysis defaults to seed 0 for IEEE-14, 30, 57, and 118. Pass
+`--all-seeds` for seeds 0–4, or select a subset with `--case 57 --seeds 0 1`.
+It reads the saved `logr` runs from `datakit_out_new`, `grids_new`, `tb_new`,
+and `results_new` under `src/`. It writes the RX-style reports under
+`results_new/new_error_distribution/caseN/seedS/`,
+`results_new/new_resistance_error_reduction/k2p5_s40_d50_a60_logr/pf_only/`,
+and `results_new/new_statistical_tests/caseN/`.
+
 ### 6. Replot saved results for the paper
 
 ```bash

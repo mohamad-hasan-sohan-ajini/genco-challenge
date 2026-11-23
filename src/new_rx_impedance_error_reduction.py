@@ -91,46 +91,17 @@ def load_checkpoint(case, seed, run, curves):
     return path, checkpoint
 
 
-def reduction(initial, final):
-    return 100 * (1 - final / initial) if initial > 0 else np.nan
-
-
 def recovery_row(case, seed, checkpoint, curves):
-    """Measure actual network recovery; combined impedance RMSE = sqrt(mean(|Zhat-Z|²))."""
-    rows = rx.read_matpower_branch_rows(rx.GRIDS / f"{rx.aged_name(case, seed)}.m")
-    nominal_rows = rx.read_matpower_branch_rows(rx.GRIDS / f"case{case}_original.m")
-    mask = checkpoint["learnable_line_mask"].numpy().astype(bool)
-    if len(rows) != mask.size or len(nominal_rows) != mask.size:
-        raise ValueError("Ground-truth network and checkpoint branch counts differ")
-    result = {"case": case, "seed": seed, "n_seeds": 1, "eligible_lines": int(mask.sum()),
-              "initial_epoch": 0, "final_epoch": int(curves["loss/power_flow_mse"].epoch.iloc[-1])}
-    initial_errors, final_errors = [], []
-    for component, column in (("resistance", 2), ("reactance", 3)):
-        actual = np.array([row[column] for row in rows])[mask]
-        nominal = np.array([row[column] for row in nominal_rows])[mask]
-        saved_nominal = checkpoint[f"initial_{component}_pu"].numpy()[mask]
-        estimated = checkpoint[f"estimated_{component}_pu"].numpy()[mask]
-        if not np.allclose(nominal, saved_nominal, rtol=1e-5, atol=1e-8):
-            raise ValueError(f"Checkpoint nominal {component} differs from the RX network")
-        if not all(np.isfinite(value).all() for value in (actual, nominal, estimated)):
-            raise ValueError("Non-finite ground-truth or estimated impedance")
-        initial, final = nominal - actual, estimated - actual
-        initial_errors.append(initial)
-        final_errors.append(final)
-        for metric, calculate in (("mae", lambda values: np.mean(np.abs(values))),
-                                   ("rmse", lambda values: np.sqrt(np.mean(values**2)))):
-            before, after = float(calculate(initial)), float(calculate(final))
-            result[f"{component}_{metric}_nominal_pu"] = before
-            result[f"{component}_{metric}_estimated_pu"] = after
-            result[f"{component}_{metric}_reduction_pct"] = reduction(before, after)
-    before = float(np.sqrt(np.mean(initial_errors[0]**2 + initial_errors[1]**2)))
-    after = float(np.sqrt(np.mean(final_errors[0]**2 + final_errors[1]**2)))
-    result.update(impedance_rmse_nominal_pu=before, impedance_rmse_estimated_pu=after,
-                  impedance_rmse_reduction_pct=reduction(before, after))
+    """Measure recovery against actual MATPOWER parameters."""
+    components = rx.recovery_components(rx.GRIDS, case, rx.aged_name(case, seed), checkpoint)
+    result = {"case": case, "seed": seed, "n_seeds": 1,
+              "eligible_lines": len(components["resistance"][0]), "initial_epoch": 0,
+              "final_epoch": int(curves["loss/power_flow_mse"].epoch.iloc[-1]),
+              **rx.recovery_metrics(components)}
     for tag, (metric, _) in METRICS.items():
         before, after = float(curves[tag].value.iloc[0]), float(curves[tag].value.iloc[-1])
         result.update({f"logged_{metric}_initial": before, f"logged_{metric}_final": after,
-                       f"logged_{metric}_reduction_pct": reduction(before, after)})
+                       f"logged_{metric}_reduction_pct": rx.reduction(before, after)})
     return result
 
 
@@ -153,27 +124,8 @@ def plot_learning(case, runs, directory, seed_label):
 
 
 def plot_parity(case, seed, checkpoint, directory):
-    actual_rows = rx.read_matpower_branch_rows(rx.GRIDS / f"{rx.aged_name(case, seed)}.m")
-    mask = checkpoint["learnable_line_mask"].numpy().astype(bool)
-    for component, column, symbol in (("resistance", 2, "R"), ("reactance", 3, "X")):
-        truth = np.array([row[column] for row in actual_rows])[mask]
-        nominal = checkpoint[f"initial_{component}_pu"].numpy()[mask]
-        estimated = checkpoint[f"estimated_{component}_pu"].numpy()[mask]
-        lower, upper = min(truth.min(), nominal.min(), estimated.min()), max(truth.max(), nominal.max(), estimated.max())
-        if lower == upper:
-            lower, upper = lower - .01, upper + .01
-        figure, axis = plt.subplots(figsize=(5, 5), constrained_layout=True)
-        axis.scatter(nominal, truth, color="red", label="Nominal", s=18)
-        axis.scatter(estimated, truth, color="blue", label="Estimated", s=18)
-        axis.plot([lower, upper], [lower, upper], "k--", linewidth=1)
-        axis.set(xlabel=f"Nominal / estimated {symbol} (p.u.)", ylabel=f"Actual aged {symbol} (p.u.)",
-                 xlim=(lower, upper), ylim=(lower, upper))
-        axis.set_aspect("equal", adjustable="box")
-        axis.grid(alpha=.2)
-        figure.canvas.draw()
-        rx.pf.place_top_legend(axis, figure.canvas.get_renderer())
-        figure.savefig(directory / f"case{case}-seed{seed}-{component}_estimated_vs_aged.pdf", dpi=300)
-        plt.close(figure)
+    components = rx.recovery_components(rx.GRIDS, case, rx.aged_name(case, seed), checkpoint)
+    rx.plot_recovery_parity(case, seed, components, directory)
 
 
 def deployment(case, seed, run, checkpoint_path, checkpoint, bundle):

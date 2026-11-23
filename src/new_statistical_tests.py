@@ -1,23 +1,19 @@
-"""Summarize saved GENCO errors for an IEEE case without rerunning inference.
+"""Summarize saved resistance-only GENCO errors without rerunning inference.
 
 Run from the repository root:
     venv/bin/python src/new_statistical_tests.py --case 57
 
-Inputs: src/results/new_error_distribution/caseN/seedS/*_errors.npy
+Inputs: src/results_new/new_error_distribution/caseN/seedS/*_errors.npy
 and full-dataset estimated-resistance exports in
-src/results/new_resistance_error_reduction/k2p5_s40_d50_a60_logr/pf_only/
+src/results_new/new_resistance_error_reduction/k2p5_s40_d50_a60_logr/pf_only/
     caseN/seedS/run-*/caseN-seedS-aged_pf_estimated_resistance_*_errors.npy
 --estimated-dir overrides the experiment root (the directory containing caseN).
-All baseline seed directories must contain all twelve baseline arrays. The
-latest deployment run per seed is selected. Only completed full-dataset exports
-with a deployment manifest are used; partial sample-limit folders are ignored.
-Estimated results use available seeds; missing seeds are printed explicitly.
-Outputs: src/results/new_statistical_tests/caseN/
-    skewness_by_seed.csv
-    wasserstein_seed_pairs.csv
-    statistical_summary.csv (individual results for every seed)
-    statistical_summary_aggregated.csv (mean and std across seeds)
-    estimated_error_sources.csv (selected runs and input provenance)
+Each selected case/seed requires twelve baseline arrays and a completed
+full-dataset deployment export from the latest run.
+Defaults to all IEEE cases and seed 0; --all-seeds selects seeds 0–4.
+Outputs under src/results_new/new_statistical_tests/caseN/:
+    caseN-{moments_by_seed,wasserstein_seed_pairs,statistical_summary,
+           statistical_summary_aggregated,estimated_error_sources}_seedsS-....csv
 
 Skewness about zero is E[e**3] / E[e**2]**1.5, without centering errors.
 It is calculated separately for all four conditions and all four variables.
@@ -33,12 +29,12 @@ distances. Seeds have equal weight even when their error counts differ. It inclu
 separate numeric mean and std columns.
 The per-seed report contains each metric's individual value in a value column,
 without aggregating across seeds or assigning a standard deviation.
-Non-finite errors are excluded and their counts recorded in skewness_by_seed.
+Non-finite errors are excluded and their counts recorded in moments_by_seed.
 All-zero errors have undefined skewness (NaN); undefined metric values are
 counted and excluded from summaries. A single defined value has undefined std.
 """
 
-import argparse
+from itertools import combinations
 import json
 from pathlib import Path
 import re
@@ -47,8 +43,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import wasserstein_distance
 
+import resistance_analysis as resistance
 
-PROJECT_DIR = Path(__file__).resolve().parent
 VARIABLES = (("Vm", "p.u."), ("Va", "degrees"), ("P", "MW"), ("Q", "MVAr"))
 BASELINE_CONDITIONS = (
     "matched_nominal",
@@ -57,47 +53,38 @@ BASELINE_CONDITIONS = (
 )
 ESTIMATED_CONDITION = "aged_pf_estimated_resistance"
 CONDITIONS = (*BASELINE_CONDITIONS, ESTIMATED_CONDITION)
-WASSERSTEIN_COMPARISONS = (
-    (
-        "matched_aged_vs_mismatched_aged_pf_nominal_impedance",
-        "matched_aged",
-        "mismatched_aged_pf_nominal_impedance",
-    ),
-    ("matched_aged_vs_matched_nominal", "matched_aged", "matched_nominal"),
-    (
-        "matched_nominal_vs_mismatched_aged_pf_nominal_impedance",
-        "matched_nominal",
-        "mismatched_aged_pf_nominal_impedance",
-    ),
-    *(
-        (f"{condition}_vs_{ESTIMATED_CONDITION}", condition, ESTIMATED_CONDITION)
-        for condition in BASELINE_CONDITIONS
-    ),
+WASSERSTEIN_COMPARISONS = tuple(
+    (f"{left}_vs_{right}", left, right) for left, right in combinations(CONDITIONS, 2)
 )
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", type=int, choices=(14, 30, 57, 118), required=True)
+    parser = resistance.parser(__doc__)
+    parser.add_argument("--baseline-dir", type=Path, default=resistance.BASELINES)
+    parser.add_argument("--output-dir", type=Path, default=resistance.STATISTICS)
     parser.add_argument(
         "--estimated-dir", type=Path,
-        default=(PROJECT_DIR / "results" / "new_resistance_error_reduction"
-                 / "k2p5_s40_d50_a60_logr" / "pf_only"),
+        default=resistance.DEPLOYMENT / resistance.TAG / "pf_only",
         help="Estimated-error experiment root containing caseN/seedS/run-* exports",
     )
-    return parser.parse_args(argv)
+    return resistance.select_cases_and_seeds(parser.parse_args(argv))
 
 
-def discover_seed_directories(input_dir):
-    """Require complete exports for every discovered seed, avoiding partial summaries."""
+def discover_seed_directories(input_dir, seeds=None):
+    """Require complete baseline exports for the requested seeds."""
     directories = {}
     for path in input_dir.glob("seed*"):
         match = re.fullmatch(r"seed(\d+)", path.name)
-        if path.is_dir() and match:
+        if path.is_dir() and match and (seeds is None or int(match.group(1)) in seeds):
             seed = int(match.group(1))
             if seed in directories:
                 raise ValueError(f"Multiple directories for seed {seed}: {input_dir}")
             directories[seed] = path
+    if seeds is not None and (missing_seeds := sorted(set(seeds) - directories.keys())):
+        raise FileNotFoundError(
+            f"Missing baseline seed directories {missing_seeds} in {input_dir}. "
+            "Run new_error_distribution.py first."
+        )
     if not directories:
         raise FileNotFoundError(
             f"No seed directories in {input_dir}. Run new_error_distribution.py first."
@@ -140,6 +127,8 @@ def discover_estimated_directories(root, case, seeds):
             raise ValueError(f"Estimated error manifest does not match its case/seed/run: {manifest_path}")
         if manifest.get("all_eligible_scenarios") is not True:
             raise ValueError(f"Estimated error export does not confirm full dataset coverage: {manifest_path}")
+        if manifest.get("estimation_target", "resistance") != "resistance":
+            raise ValueError(f"Estimated error export is not resistance-only: {manifest_path}")
         missing = [
             directory / f"{prefix}-{ESTIMATED_CONDITION}_{variable}_errors.npy"
             for variable, _ in VARIABLES
@@ -150,10 +139,9 @@ def discover_estimated_directories(root, case, seeds):
         directories[seed] = directory
         sources.append({
             "case": case, "seed": seed, "run_id": directory.name,
-            "error_directory": str(directory), "manifest": str(manifest_path),
+            "manifest": str(manifest_path),
             "checkpoint": manifest.get("checkpoint", ""),
             "checkpoint_sha256": manifest.get("checkpoint_sha256", ""),
-            "tensorboard_run": manifest.get("tensorboard_run", ""),
         })
     if not directories:
         raise FileNotFoundError(
@@ -229,23 +217,23 @@ def calculate_statistics(case, seed_directories, estimated_directories=None):
                 mean_signed_errors.append(mean_signed_error)
                 skewness_rows.append({
                     "case": case,
+                    "seed": seed,
                     "variable": variable,
                     "unit": unit,
                     "condition": condition,
-                    "seed": seed,
+                    "mean_signed_error": mean_signed_error,
+                    "skewness_around_zero": skewness,
                     "n_errors": errors.size + n_excluded,
                     "n_finite": errors.size,
                     "n_excluded": n_excluded,
-                    "skewness_around_zero": skewness,
-                    "mean_signed_error": mean_signed_error,
                 })
-            summary_rows.append(summarize(
-                case, variable, "dimensionless", "skewness_around_zero",
-                condition, skewness_values,
-            ))
             summary_rows.append(summarize(
                 case, variable, unit, "mean_signed_error",
                 condition, mean_signed_errors,
+            ))
+            summary_rows.append(summarize(
+                case, variable, "dimensionless", "skewness_around_zero",
+                condition, skewness_values,
             ))
 
         for comparison, reference_condition, other_condition in WASSERSTEIN_COMPARISONS:
@@ -312,37 +300,30 @@ def per_seed_report(skewness, distances):
 
 def main(argv=None):
     options = parse_args(argv)
-    input_dir = PROJECT_DIR / "results" / "new_error_distribution" / f"case{options.case}"
-    output_dir = PROJECT_DIR / "results" / "new_statistical_tests" / f"case{options.case}"
-    seed_directories = discover_seed_directories(input_dir)
-    estimated_directories, estimated_sources = discover_estimated_directories(
-        options.estimated_dir, options.case, seed_directories,
-    )
-    print(f"IEEE-{options.case}: seeds {list(seed_directories)}")
-    print(f"Estimated resistance: seeds {list(estimated_directories)}")
-    missing_estimated = sorted(set(seed_directories) - set(estimated_directories))
-    if missing_estimated:
-        print(f"Estimated resistance not yet available for seeds {missing_estimated}; "
-              "these seeds remain in baseline statistics only.")
-    print(
-        f"Wasserstein-1: {len(seed_directories)} pairs per baseline comparison, "
-        f"{len(estimated_directories)} per estimated comparison (same seed only)"
-    )
-    skewness, distances, summary = calculate_statistics(
-        options.case, seed_directories, estimated_directories,
-    )
-    output_dir.mkdir(parents=True, exist_ok=True)
-    for filename, table in (
-        ("skewness_by_seed.csv", skewness),
-        ("wasserstein_seed_pairs.csv", distances),
-        ("statistical_summary.csv", per_seed_report(skewness, distances)),
-        ("statistical_summary_aggregated.csv", summary),
-        ("estimated_error_sources.csv", estimated_sources),
-    ):
-        path = output_dir / filename
-        table.to_csv(path, index=False, na_rep="NaN")
-        print(f"Saved {path}")
-    print(summary.to_string(index=False))
+    seed_label = "-".join(map(str, options.seeds))
+    for case in options.case:
+        seed_directories = discover_seed_directories(options.baseline_dir / f"case{case}", options.seeds)
+        estimated_directories, sources = discover_estimated_directories(
+            options.estimated_dir, case, seed_directories,
+        )
+        if missing := sorted(seed_directories.keys() - estimated_directories.keys()):
+            raise FileNotFoundError(
+                f"Missing completed resistance deployment for case{case}, seeds {missing}. "
+                "Run new_resistance_error_reduction.py first."
+            )
+        moments, distances, summary = calculate_statistics(case, seed_directories, estimated_directories)
+        output_dir = options.output_dir / f"case{case}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for name, table in (
+            ("statistical_summary", per_seed_report(moments, distances)),
+            ("statistical_summary_aggregated", summary),
+            ("moments_by_seed", moments),
+            ("wasserstein_seed_pairs", distances),
+            ("estimated_error_sources", sources),
+        ):
+            path = output_dir / f"case{case}-{name}_seeds{seed_label}.csv"
+            table.to_csv(path, index=False, na_rep="NaN")
+            print(f"Saved {path}")
 
 
 if __name__ == "__main__":
