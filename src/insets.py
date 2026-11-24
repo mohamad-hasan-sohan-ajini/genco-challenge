@@ -1,15 +1,17 @@
-"""Replot the resistance-only overlays with zoom insets from inset_config.json.
+"""Replot the resistance-only overlays with zoom insets from inset_config.yaml.
 
 Run from the repository root with venv/bin/python src/insets.py.
 Defaults to all four IEEE cases and seed 0. Outputs are written alongside the
 deployment PDFs in the latest run directory for each selected case and seed.
+Each configured panel uses the same inset bounds for both overlays. Panels
+omitted from the YAML, such as IEEE-118 Va and P, have no inset.
 """
 
-import json
 from functools import partial
 from pathlib import Path
 
 import numpy as np
+import yaml
 from matplotlib.ticker import MaxNLocator
 
 import new_error_distribution as plots
@@ -22,24 +24,23 @@ LABELS = dict(zip(errors.CONDITIONS, (
     plots.MATCHED_NOMINAL, plots.MATCHED_AGED, plots.MISMATCHED, ESTIMATED_LABEL,
 )))
 OVERLAYS = (
-    ("matched_and_mismatched", "matched_and_mismatched", errors.BASELINE_CONDITIONS),
-    ("all_conditions", "all_conditions_with_estimated_resistance", errors.CONDITIONS),
+    ("matched_and_mismatched", errors.BASELINE_CONDITIONS),
+    ("all_conditions_with_estimated_resistance", errors.CONDITIONS),
 )
 
 
-def add_inset(axis, variable, *, panels, overlay):
+def add_inset(axis, variable, *, panels):
     panel = panels.get(variable)
     if panel is None:
         return
 
-    placement = panel["inset_placement"][overlay]
-    left, top = placement["top_left"]
-    right, bottom = placement["bottom_right"]
+    left, right = sorted(panel["inset"]["x"])
+    bottom, top = sorted(panel["inset"]["y"])
     xmin, xmax = panel["zoom"]["x"]
     ymin, ymax = panel["zoom"]["y"]
     if (not np.isfinite([left, top, right, bottom, xmin, xmax, ymin, ymax]).all()
             or not (left < right and bottom < top and xmin < xmax and ymin < ymax)):
-        raise ValueError(f"Invalid inset bounds for {variable}, {overlay}")
+        raise ValueError(f"Invalid inset bounds for {variable}")
 
     # The config uses parent data coordinates. Include the box in the parent
     # limits if a selected seed has a different histogram range.
@@ -84,12 +85,12 @@ def load_arrays(case, seed, baseline_dir, run_dir):
 
 def main(argv=None):
     parser = resistance.parser(__doc__)
-    parser.add_argument("--config", type=Path, default=resistance.ROOT / "inset_config.json")
+    parser.add_argument("--config", type=Path, default=resistance.ROOT / "inset_config.yaml")
     parser.add_argument("--baseline-dir", type=Path, default=resistance.BASELINES)
     parser.add_argument("--estimated-dir", type=Path,
                         default=resistance.DEPLOYMENT / resistance.TAG / "pf_only")
     options = resistance.select_cases_and_seeds(parser.parse_args(argv))
-    config = json.loads(options.config.read_text(encoding="utf-8"))
+    config = yaml.safe_load(options.config.read_text(encoding="utf-8"))
     colors = {**plots.CONDITION_COLORS, ESTIMATED_LABEL: "blue"}
 
     for case in options.case:
@@ -101,7 +102,7 @@ def main(argv=None):
         for seed in options.seeds:
             run = runs[seed]
             arrays = load_arrays(case, seed, baselines[seed], run)
-            for overlay, name, conditions in OVERLAYS:
+            for name, conditions in OVERLAYS:
                 data = {
                     variable: {LABELS[condition]: values[condition] for condition in conditions}
                     for variable, values in arrays.items()
@@ -109,7 +110,7 @@ def main(argv=None):
                 output = run / f"case{case}-seed{seed}-{name}_prediction_error_distribution_insets.pdf"
                 plots.plot_error_arrays(
                     data, output, colors=colors,
-                    decorate_axis=partial(add_inset, panels=panels, overlay=overlay),
+                    decorate_axis=partial(add_inset, panels=panels),
                 )
 
 
